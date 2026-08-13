@@ -1241,33 +1241,11 @@ local function enforceDirectWear()
 			part.LocalTransparencyModifier = 1
 		end
 	end
-
 	for visual in pairs(state.originalHeadVisualTransparency) do
 		if visual and visual.Parent then
 			visual.Transparency = 1
 		end
 	end
-
-	local character = state.realCharacter
-	local realHead = character and character:FindFirstChild("Head")
-	if realHead then
-		for _, visual in ipairs(realHead:GetChildren()) do
-			if (
-				visual:IsA("Decal")
-				or visual:IsA("Texture")
-			)
-			and visual:GetAttribute("CaelusDirectWear") ~= true
-			then
-				if state.originalHeadVisualTransparency[visual] == nil then
-					state.originalHeadVisualTransparency[visual] =
-						visual.Transparency
-				end
-
-				visual.Transparency = 1
-			end
-		end
-	end
-
 	for _, part in ipairs(state.driverCoreParts) do
 		if part and part.Parent then
 			part.LocalTransparencyModifier = 1
@@ -1441,81 +1419,13 @@ local function mountDirectWear(driver, character, humanoid, realRoot)
 	local driverHead = driver:FindFirstChild("Head")
 	local realHead = character:FindFirstChild("Head")
 	if driverHead and realHead then
-		local function moveDriverFaceVisual(child)
-			if not (
-				child
-				and (
-					child:IsA("Decal")
-					or child:IsA("Texture")
-				)
-			) then
-				return
-			end
-
-			child:SetAttribute("CaelusDirectWear", true)
-			child.Parent = realHead
-			table.insert(state.directWearInstances, child)
-		end
-
-		local function hideLateOriginalFace(child)
-			if not (
-				child
-				and (
-					child:IsA("Decal")
-					or child:IsA("Texture")
-				)
-			) then
-				return
-			end
-
-			if child:GetAttribute("CaelusDirectWear") == true then
-				return
-			end
-
-			if state.originalHeadVisualTransparency[child] == nil then
-				state.originalHeadVisualTransparency[child] =
-					child.Transparency
-			end
-
-			child.Transparency = 1
-		end
-
 		for _, child in ipairs(driverHead:GetChildren()) do
-			moveDriverFaceVisual(child)
+			if child:IsA("Decal") or child:IsA("Texture") then
+				child:SetAttribute("CaelusDirectWear", true)
+				child.Parent = realHead
+				table.insert(state.directWearInstances, child)
+			end
 		end
-
-		for _, child in ipairs(realHead:GetChildren()) do
-			hideLateOriginalFace(child)
-		end
-
-		rememberFollow(
-			driverHead.ChildAdded:Connect(function(child)
-				task.defer(function()
-					if state.shadow ~= driver
-					or state.realCharacter ~= character
-					or not child.Parent
-					then
-						return
-					end
-
-					moveDriverFaceVisual(child)
-				end)
-			end)
-		)
-
-		rememberFollow(
-			realHead.ChildAdded:Connect(function(child)
-				task.defer(function()
-					if state.realCharacter ~= character
-					or not child.Parent
-					then
-						return
-					end
-
-					hideLateOriginalFace(child)
-				end)
-			end)
-		)
 	end
 
 	for _, part in ipairs(state.driverCoreParts) do
