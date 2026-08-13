@@ -1235,14 +1235,6 @@ local function syncDirectPose()
 	end
 end
 
-state.nekoFaceVisualNames = {
-	eyes = true,
-	mouth = true,
-	brows = true,
-	blush = true,
-	extra = true,
-}
-
 local function enforceDirectWear()
 	for part in pairs(state.originalAccessoryTransparency) do
 		if part and part.Parent then
@@ -1264,7 +1256,7 @@ local function enforceDirectWear()
 				visual:IsA("Decal")
 				or visual:IsA("Texture")
 			)
-			and state.nekoFaceVisualNames[string.lower(visual.Name)] ~= true
+			and visual:GetAttribute("CaelusDirectWear") ~= true
 			then
 				if state.originalHeadVisualTransparency[visual] == nil then
 					state.originalHeadVisualTransparency[visual] =
@@ -1460,13 +1452,7 @@ local function mountDirectWear(driver, character, humanoid, realRoot)
 				return
 			end
 
-			if state.nekoFaceVisualNames[string.lower(child.Name)] ~= true then
-				child.Transparency = 1
-				return
-			end
-
 			child:SetAttribute("CaelusDirectWear", true)
-			child.Transparency = 0
 			child.Parent = realHead
 			table.insert(state.directWearInstances, child)
 		end
@@ -1482,10 +1468,7 @@ local function mountDirectWear(driver, character, humanoid, realRoot)
 				return
 			end
 
-			if state.nekoFaceVisualNames[string.lower(child.Name)] == true
-			and child:GetAttribute("CaelusDirectWear") == true
-			then
-				child.Transparency = 0
+			if child:GetAttribute("CaelusDirectWear") == true then
 				return
 			end
 
