@@ -1,21 +1,3 @@
--- File: LOADER_3_29_REMOTE_CACHE.lua
--- Caelus Neko Hub 3.29 Remote Cache
---
--- Upload this file, hub.lua, and the assets/ folder to the same GitHub repo.
--- Change BASE_URL below to the raw GitHub URL of that folder.
-
-local BASE_URL = "PASTE_RAW_GITHUB_FOLDER_URL_HERE"
-
-if BASE_URL == "PASTE_RAW_GITHUB_FOLDER_URL_HERE"
-or BASE_URL == ""
-then
-	error(
-		"[Caelus Neko 3.29] Set BASE_URL to your raw GitHub folder URL first.",
-		0
-	)
-end
-
-BASE_URL = BASE_URL:gsub("/+$", "")
 
 if not game:IsLoaded() then
 	game.Loaded:Wait()
@@ -229,7 +211,7 @@ function runtime:getAssetUri(fileName)
 		print("[Caelus Neko 3.29] Downloading " .. fileName .. "...")
 
 		local body, downloadProblem = fetch(
-			self.baseUrl .. "/assets/" .. fileName,
+			self.baseUrl .. "/" .. fileName,
 			3
 		)
 
