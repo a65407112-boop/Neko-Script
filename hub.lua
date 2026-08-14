@@ -4077,6 +4077,132 @@ function environment.CaelusNekoAPI:GetActiveMorph()
 	return state.activeMorph, state.activeVersion
 end
 
+function environment.CaelusNekoAPI:SetVersion(versionName)
+	if not table.find(VERSIONS, versionName) then
+		return false, "Unknown Neko version: " .. tostring(versionName)
+	end
+
+	state.selectedVersion = versionName
+
+	if environment.CaelusPendalarNekoUI
+		and environment.CaelusPendalarNekoUI.VersionLabel
+	then
+		environment.CaelusPendalarNekoUI.VersionLabel.Text =
+			"Selected Neko Version : " .. versionName
+	end
+
+	return true
+end
+
+function environment.CaelusNekoAPI:GetVersion()
+	return state.selectedVersion or state.activeVersion or "V4"
+end
+
+function environment.CaelusNekoAPI:GetSelectedCustom()
+	if state.selectedMorph ~= CUSTOM_MORPH_NAME
+		or not state.customNeko
+	then
+		return nil
+	end
+
+	return copyCustomConfig(state.customNeko)
+end
+
+function environment.CaelusNekoAPI:SaveCustom(
+	name,
+	versionName,
+	skinColor,
+	assetText,
+	use3DPants,
+	previousName
+)
+	local normalizedName, nameProblem = normalizePresetName(name)
+
+	if not normalizedName then
+		return false, nameProblem
+	end
+
+	if typeof(skinColor) ~= "Color3" then
+		return false, "Skin color must be Color3."
+	end
+
+	if not validVersion(versionName) then
+		versionName = "V4"
+	end
+
+	local assetIds, assetProblem =
+		parseCustomAssetIds(assetText or "")
+
+	if not assetIds then
+		return false, assetProblem
+	end
+
+	local existingWithName = state.savedPresets[normalizedName]
+
+	if existingWithName
+		and normalizedName ~= previousName
+	then
+		return false, "A saved Neko already uses that name."
+	end
+
+	local previousPath
+
+	if previousName and state.savedPresets[previousName] then
+		previousPath = state.savedPresets[previousName].filePath
+	end
+
+	local config = {
+		name = normalizedName,
+		version = versionName,
+		skinColor = skinColor,
+		assetIds = assetIds,
+		use3DPants = use3DPants ~= false,
+	}
+
+	local exported, exportResult =
+		savePresetToDisk(config, previousPath)
+
+	if previousName and previousName ~= normalizedName then
+		state.savedPresets[previousName] = nil
+	end
+
+	state.savedPresets[normalizedName] = copyCustomConfig(config)
+
+	if exported then
+		state.savedPresets[normalizedName].filePath = exportResult
+		FILE_API.writePresetIndex()
+	else
+		startupLog(
+			"Pendalar preset is session-only: "
+				.. tostring(exportResult)
+		)
+	end
+
+	refreshPresetButtons()
+
+	state.customNeko = copyCustomConfig(config)
+	state.selectedMorph = CUSTOM_MORPH_NAME
+	state.selectedVersion = versionName
+	selectedText.Text = normalizedName
+	selectedValue.Value = CUSTOM_MORPH_NAME
+
+	return true, normalizedName
+end
+
+function environment.CaelusNekoAPI:ApplySelectedCustom()
+	if not state.customNeko then
+		return false, "No Custom Neko is selected."
+	end
+
+	task.spawn(
+		applyMorph,
+		state.customNeko.version or state.selectedVersion or "V4",
+		CUSTOM_MORPH_NAME
+	)
+
+	return true
+end
+
 function environment.CaelusNekoAPI:Destroy()
 	if state and type(state.Destroy) == "function" then
 		state:Destroy()
@@ -4113,6 +4239,14 @@ end
 environment.CaelusPendalarNekoUI = {
 	Session = state,
 	Window = nil,
+	VersionLabel = nil,
+	EditorStatus = nil,
+	EditorSkinColor = DEFAULT_WHITE_NEKO_SKIN,
+	EditorUse3DPants = true,
+	EditorPreviousName = nil,
+	FlingEnabled = false,
+	FlingConnections = {},
+	Scripts = {},
 	LibraryUrl =
 		"https://raw.githubusercontent.com/shidemuri/scripts/main/newuilib.lua",
 }
@@ -4213,6 +4347,436 @@ function environment.CaelusPendalarNekoUI:Recolor(sourceText)
 	return sourceText, total
 end
 
+function environment.CaelusPendalarNekoUI:DisconnectFling()
+	for _, connection in ipairs(self.FlingConnections) do
+		pcall(function()
+			connection:Disconnect()
+		end)
+	end
+
+	table.clear(self.FlingConnections)
+	self.FlingEnabled = false
+
+	local character = player.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+
+	if root then
+		root.AssemblyAngularVelocity = Vector3.zero
+	end
+end
+
+function environment.CaelusPendalarNekoUI:SetTouchFling(enabled)
+	self:DisconnectFling()
+
+	if not enabled then
+		return
+	end
+
+	self.FlingEnabled = true
+
+	local function bindCharacter(character)
+		local root = character:WaitForChild("HumanoidRootPart", 8)
+
+		if not root or not self.FlingEnabled then
+			return
+		end
+
+		for _, part in ipairs(character:GetDescendants()) do
+			if part:IsA("BasePart") then
+				table.insert(
+					self.FlingConnections,
+					part.Touched:Connect(function(hit)
+						if not self.FlingEnabled
+							or not hit
+							or not hit.Parent
+						then
+							return
+						end
+
+						local otherHumanoid =
+							hit.Parent:FindFirstChildOfClass("Humanoid")
+							or (
+								hit.Parent.Parent
+								and hit.Parent.Parent:FindFirstChildOfClass(
+									"Humanoid"
+								)
+							)
+
+						if not otherHumanoid
+							or otherHumanoid.Parent == character
+						then
+							return
+						end
+
+						root.AssemblyAngularVelocity =
+							Vector3.new(0, 3500, 0)
+
+						root.AssemblyLinearVelocity =
+							root.CFrame.LookVector * 85
+							+ Vector3.new(0, 18, 0)
+
+						task.delay(0.12, function()
+							if root and root.Parent then
+								root.AssemblyAngularVelocity =
+									Vector3.zero
+							end
+						end)
+					end)
+				)
+			end
+		end
+	end
+
+	if player.Character then
+		task.spawn(bindCharacter, player.Character)
+	end
+
+	table.insert(
+		self.FlingConnections,
+		player.CharacterAdded:Connect(function(character)
+			if self.FlingEnabled then
+				task.spawn(bindCharacter, character)
+			end
+		end)
+	)
+end
+
+function environment.CaelusPendalarNekoUI:RunScript(scriptEntry)
+	local url = scriptEntry.Url or scriptEntry[2]
+
+	if type(url) ~= "string" or url == "" then
+		return false, "Script URL is missing."
+	end
+
+	local sourceText, fetchProblem = self:Fetch(url)
+
+	if not sourceText then
+		return false, fetchProblem
+	end
+
+	if type(loadstring) ~= "function" then
+		return false, "loadstring() is unavailable."
+	end
+
+	local chunk, compileProblem = loadstring(
+		sourceText,
+		"=PendalarUserScript"
+	)
+
+	if not chunk then
+		return false, compileProblem
+	end
+
+	task.spawn(function()
+		local ok, runtimeProblem = pcall(chunk)
+
+		if not ok then
+			warn(
+				"[Pendalar Scripts] "
+					.. tostring(runtimeProblem)
+			)
+		end
+	end)
+
+	return true
+end
+
+function environment.CaelusPendalarNekoUI:AddScript(
+	name,
+	url,
+	description
+)
+	if type(name) ~= "string"
+		or name:gsub("%s+", "") == ""
+	then
+		return false, "Script name is required."
+	end
+
+	if type(url) ~= "string"
+		or not url:match("^https?://")
+	then
+		return false, "A valid http(s) URL is required."
+	end
+
+	local entry = {
+		Name = name,
+		Url = url,
+		Description = description or "Run " .. name,
+	}
+
+	table.insert(self.Scripts, entry)
+
+	if self.ScriptsTab then
+		self.ScriptsTab:NewButton(
+			entry.Name,
+			entry.Description,
+			function()
+				local ok, problem = self:RunScript(entry)
+
+				if not ok then
+					warn(
+						"[Pendalar Scripts] "
+							.. tostring(problem)
+					)
+				end
+			end
+		)
+	end
+
+	return true
+end
+
+function environment.CaelusPendalarNekoUI:CreateColorPicker(tab)
+	local scrollingFrame =
+		tab.Tab:FindFirstChildOfClass("ScrollingFrame")
+
+	if not scrollingFrame then
+		return
+	end
+
+	local holder = Instance.new("Frame")
+	holder.Name = "SkinColorPicker"
+	holder.Size = UDim2.fromOffset(385, 205)
+	holder.BackgroundColor3 = Color3.fromRGB(194, 73, 115)
+	holder.BorderSizePixel = 0
+	holder.Parent = scrollingFrame
+	Instance.new("UICorner", holder).CornerRadius = UDim.new(0, 5)
+
+	local title = Instance.new("TextLabel")
+	title.BackgroundTransparency = 1
+	title.Position = UDim2.fromOffset(12, 7)
+	title.Size = UDim2.new(1, -24, 0, 24)
+	title.Font = Enum.Font.Roboto
+	title.Text = "Skin Color"
+	title.TextColor3 = Color3.new(1, 1, 1)
+	title.TextSize = 17
+	title.TextXAlignment = Enum.TextXAlignment.Left
+	title.Parent = holder
+
+	local sv = Instance.new("ImageButton")
+	sv.Name = "SaturationValue"
+	sv.AutoButtonColor = false
+	sv.Position = UDim2.fromOffset(12, 38)
+	sv.Size = UDim2.fromOffset(300, 120)
+	sv.BorderSizePixel = 0
+	sv.BackgroundColor3 = Color3.fromHSV(0, 1, 1)
+	sv.Image = "rbxassetid://4155801252"
+	sv.Parent = holder
+	Instance.new("UICorner", sv).CornerRadius = UDim.new(0, 4)
+
+	local hue = Instance.new("ImageButton")
+	hue.Name = "Hue"
+	hue.AutoButtonColor = false
+	hue.Position = UDim2.fromOffset(324, 38)
+	hue.Size = UDim2.fromOffset(48, 120)
+	hue.BorderSizePixel = 0
+	hue.Parent = holder
+	Instance.new("UICorner", hue).CornerRadius = UDim.new(0, 4)
+
+	local hueGradient = Instance.new("UIGradient")
+	hueGradient.Rotation = 90
+	hueGradient.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0.00, Color3.fromHSV(0.00, 1, 1)),
+		ColorSequenceKeypoint.new(0.17, Color3.fromHSV(0.17, 1, 1)),
+		ColorSequenceKeypoint.new(0.33, Color3.fromHSV(0.33, 1, 1)),
+		ColorSequenceKeypoint.new(0.50, Color3.fromHSV(0.50, 1, 1)),
+		ColorSequenceKeypoint.new(0.67, Color3.fromHSV(0.67, 1, 1)),
+		ColorSequenceKeypoint.new(0.83, Color3.fromHSV(0.83, 1, 1)),
+		ColorSequenceKeypoint.new(1.00, Color3.fromHSV(1.00, 1, 1)),
+	})
+	hueGradient.Parent = hue
+
+	local preview = Instance.new("Frame")
+	preview.Name = "Preview"
+	preview.Position = UDim2.fromOffset(12, 168)
+	preview.Size = UDim2.fromOffset(34, 25)
+	preview.BorderSizePixel = 0
+	preview.Parent = holder
+	Instance.new("UICorner", preview).CornerRadius = UDim.new(0, 4)
+
+	local colorText = Instance.new("TextLabel")
+	colorText.BackgroundTransparency = 1
+	colorText.Position = UDim2.fromOffset(55, 165)
+	colorText.Size = UDim2.new(1, -67, 0, 30)
+	colorText.Font = Enum.Font.Roboto
+	colorText.TextColor3 = Color3.new(1, 1, 1)
+	colorText.TextSize = 14
+	colorText.TextXAlignment = Enum.TextXAlignment.Left
+	colorText.Parent = holder
+
+	self.ColorPicker = {
+		Holder = holder,
+		SV = sv,
+		Hue = hue,
+		Preview = preview,
+		Text = colorText,
+		H = 0.08,
+		S = 0.35,
+		V = 1,
+	}
+
+	function self.ColorPicker:SetColor(color)
+		local h, s, v = color:ToHSV()
+		self.H = h
+		self.S = s
+		self.V = v
+		sv.BackgroundColor3 = Color3.fromHSV(h, 1, 1)
+		preview.BackgroundColor3 = color
+
+		colorText.Text = string.format(
+			"#%02X%02X%02X   RGB %d, %d, %d",
+			math.floor(color.R * 255 + 0.5),
+			math.floor(color.G * 255 + 0.5),
+			math.floor(color.B * 255 + 0.5),
+			math.floor(color.R * 255 + 0.5),
+			math.floor(color.G * 255 + 0.5),
+			math.floor(color.B * 255 + 0.5)
+		)
+
+		environment.CaelusPendalarNekoUI.EditorSkinColor =
+			color
+	end
+
+	function self.ColorPicker:UpdateSV(position)
+		local x = math.clamp(
+			(position.X - sv.AbsolutePosition.X)
+				/ math.max(sv.AbsoluteSize.X, 1),
+			0,
+			1
+		)
+		local y = math.clamp(
+			(position.Y - sv.AbsolutePosition.Y)
+				/ math.max(sv.AbsoluteSize.Y, 1),
+			0,
+			1
+		)
+
+		self.S = x
+		self.V = 1 - y
+
+		self:SetColor(
+			Color3.fromHSV(self.H, self.S, self.V)
+		)
+	end
+
+	function self.ColorPicker:UpdateHue(position)
+		local y = math.clamp(
+			(position.Y - hue.AbsolutePosition.Y)
+				/ math.max(hue.AbsoluteSize.Y, 1),
+			0,
+			1
+		)
+
+		self.H = y
+		sv.BackgroundColor3 =
+			Color3.fromHSV(self.H, 1, 1)
+
+		self:SetColor(
+			Color3.fromHSV(self.H, self.S, self.V)
+		)
+	end
+
+	local svDragging = false
+	local hueDragging = false
+
+	sv.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1
+			or input.UserInputType == Enum.UserInputType.Touch
+		then
+			svDragging = true
+			self.ColorPicker:UpdateSV(input.Position)
+		end
+	end)
+
+	hue.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1
+			or input.UserInputType == Enum.UserInputType.Touch
+		then
+			hueDragging = true
+			self.ColorPicker:UpdateHue(input.Position)
+		end
+	end)
+
+	UserInputService.InputChanged:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseMovement
+			or input.UserInputType == Enum.UserInputType.Touch
+		then
+			if svDragging then
+				self.ColorPicker:UpdateSV(input.Position)
+			elseif hueDragging then
+				self.ColorPicker:UpdateHue(input.Position)
+			end
+		end
+	end)
+
+	UserInputService.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1
+			or input.UserInputType == Enum.UserInputType.Touch
+		then
+			svDragging = false
+			hueDragging = false
+		end
+	end)
+
+	self.ColorPicker:SetColor(self.EditorSkinColor)
+	scrollingFrame.CanvasSize =
+		UDim2.fromOffset(
+			scrollingFrame.CanvasSize.X.Offset,
+			scrollingFrame.CanvasSize.Y.Offset + 215
+		)
+end
+
+function environment.CaelusPendalarNekoUI:LoadEditorSelection()
+	local config = environment.CaelusNekoAPI:GetSelectedCustom()
+
+	if not config then
+		self.EditorStatus.Text =
+			"Select a saved Custom Neko first."
+		return
+	end
+
+	self.EditorPreviousName = config.name
+	self.EditorName.Text = config.name or ""
+	self.EditorVersion = config.version or "V4"
+	self.EditorUse3DPants = config.use3DPants ~= false
+
+	local ids = {}
+
+	for _, assetId in ipairs(config.assetIds or {}) do
+		table.insert(ids, tostring(assetId))
+	end
+
+	self.EditorAssets.Text = table.concat(ids, ", ")
+	self.EditorSkinColor =
+		config.skinColor or DEFAULT_WHITE_NEKO_SKIN
+
+	if self.ColorPicker then
+		self.ColorPicker:SetColor(self.EditorSkinColor)
+	end
+
+	self.EditorStatus.Text =
+		"Loaded : " .. tostring(config.name)
+end
+
+function environment.CaelusPendalarNekoUI:SaveEditor()
+	local ok, result = environment.CaelusNekoAPI:SaveCustom(
+		self.EditorName:GetText(),
+		self.EditorVersion or environment.CaelusNekoAPI:GetVersion(),
+		self.EditorSkinColor,
+		self.EditorAssets:GetText(),
+		self.EditorUse3DPants,
+		self.EditorPreviousName
+	)
+
+	if not ok then
+		self.EditorStatus.Text = tostring(result)
+		return
+	end
+
+	self.EditorPreviousName = result
+	self.EditorStatus.Text = "Saved : " .. tostring(result)
+end
+
 function environment.CaelusPendalarNekoUI:Build()
 	local sourceText, fetchProblem = self:Fetch(self.LibraryUrl)
 
@@ -4260,7 +4824,14 @@ function environment.CaelusPendalarNekoUI:Build()
 
 	local window = library:New("Pendalar Hub")
 	local nekosTab = window:NewTab("Nekos")
+	local settingsTab = window:NewTab("Settings")
+	local editorTab = window:NewTab("Neko Editor")
+	local scriptsTab = window:NewTab("Scripts")
 	local creditsTab = window:NewTab("Credits")
+
+	self.ScriptsTab = scriptsTab
+
+	nekosTab:NewSearchBar()
 
 	for _, morphName in ipairs(environment.CaelusNekoAPI.Morphs) do
 		local buttonMorphName = morphName
@@ -4271,20 +4842,198 @@ function environment.CaelusPendalarNekoUI:Build()
 			displayName,
 			"Morph into " .. displayName,
 			function()
-				local versionName =
-					state.selectedVersion
-					or state.activeVersion
-					or "V4"
-
 				local applied, problem =
 					environment.CaelusNekoAPI:Apply(
 						buttonMorphName,
-						versionName
+						environment.CaelusNekoAPI:GetVersion()
 					)
 
 				if not applied then
 					warn(
 						"[Pendalar Hub] "
+							.. tostring(problem)
+					)
+				end
+			end
+		)
+	end
+
+	self.VersionLabel = settingsTab:NewLabel(
+		"Selected Neko Version : "
+			.. environment.CaelusNekoAPI:GetVersion()
+	)
+
+	for _, versionName in ipairs(environment.CaelusNekoAPI.Versions) do
+		local selectedVersion = versionName
+
+		settingsTab:NewButton(
+			selectedVersion,
+			"Use " .. selectedVersion .. " for Neko morphs",
+			function()
+				environment.CaelusNekoAPI:SetVersion(
+					selectedVersion
+				)
+			end
+		)
+	end
+
+	settingsTab:NewBoolButton(
+		"Touch Fling",
+		"Fling players when your character touches them",
+		function(enabled)
+			self:SetTouchFling(enabled)
+		end,
+		false
+	)
+
+	editorTab:NewLabel("Custom Neko Editor")
+
+	self.EditorName = editorTab:NewTextBar(
+		"Neko Name",
+		"Name for the saved Custom Neko",
+		""
+	)
+
+	self.EditorAssets = editorTab:NewTextBar(
+		"Asset IDs",
+		"Shirt, pants, T-shirt, accessory and hat IDs",
+		""
+	)
+
+	self.EditorVersion =
+		environment.CaelusNekoAPI:GetVersion()
+
+	editorTab:NewButton(
+		"Editor Version",
+		"Cycle the version used by this Custom Neko",
+		function()
+			local currentIndex =
+				table.find(
+					environment.CaelusNekoAPI.Versions,
+					self.EditorVersion
+				)
+				or 1
+
+			local nextIndex =
+				(currentIndex % #environment.CaelusNekoAPI.Versions)
+				+ 1
+
+			self.EditorVersion =
+				environment.CaelusNekoAPI.Versions[nextIndex]
+
+			self.EditorStatus.Text =
+				"Editor Version : " .. self.EditorVersion
+		end
+	)
+
+	editorTab:NewBoolButton(
+		"3D Pants",
+		"Show generated 3D lower-body geometry",
+		function(enabled)
+			self.EditorUse3DPants = enabled
+		end,
+		true
+	)
+
+	self.EditorStatus = editorTab:NewLabel(
+		"Editor Version : " .. self.EditorVersion
+	)
+
+	self:CreateColorPicker(editorTab)
+
+	editorTab:NewButton(
+		"Load Selected",
+		"Load the selected saved Custom Neko into the editor",
+		function()
+			self:LoadEditorSelection()
+		end
+	)
+
+	editorTab:NewButton(
+		"Save & Select",
+		"Save this Custom Neko and select it",
+		function()
+			self:SaveEditor()
+		end
+	)
+
+	editorTab:NewButton(
+		"Apply Custom Neko",
+		"Apply the currently selected Custom Neko",
+		function()
+			local applied, problem =
+				environment.CaelusNekoAPI:ApplySelectedCustom()
+
+			if not applied then
+				self.EditorStatus.Text = tostring(problem)
+			end
+		end
+	)
+
+	scriptsTab:NewLabel("Pendalar Scripts")
+
+	self.ScriptName = scriptsTab:NewTextBar(
+		"Script Name",
+		"Button name",
+		""
+	)
+
+	self.ScriptUrl = scriptsTab:NewTextBar(
+		"Script URL",
+		"Raw http(s) URL",
+		""
+	)
+
+	self.ScriptDescription = scriptsTab:NewTextBar(
+		"Description",
+		"Optional description",
+		""
+	)
+
+	self.ScriptStatus = scriptsTab:NewLabel(
+		"Add scripts by raw URL"
+	)
+
+	scriptsTab:NewButton(
+		"Add Script",
+		"Add this script to the current Pendalar session",
+		function()
+			local added, problem = self:AddScript(
+				self.ScriptName:GetText(),
+				self.ScriptUrl:GetText(),
+				self.ScriptDescription:GetText()
+			)
+
+			if added then
+				self.ScriptStatus.Text =
+					"Added : " .. self.ScriptName:GetText()
+				self.ScriptName.Text = ""
+				self.ScriptUrl.Text = ""
+				self.ScriptDescription.Text = ""
+			else
+				self.ScriptStatus.Text =
+					tostring(problem)
+			end
+		end
+	)
+
+	for _, scriptEntry in ipairs(self.Scripts) do
+		local entry = scriptEntry
+		local scriptName = entry.Name or entry[1] or "Script"
+		local description =
+			entry.Description
+			or entry[3]
+			or ("Run " .. scriptName)
+
+		scriptsTab:NewButton(
+			scriptName,
+			description,
+			function()
+				local ran, problem = self:RunScript(entry)
+
+				if not ran then
+					warn(
+						"[Pendalar Scripts] "
 							.. tostring(problem)
 					)
 				end
@@ -4364,6 +5113,9 @@ end))
 function state:Destroy()
 	if self.destroyed then return end
 	self.destroyed = true
+	if environment.CaelusPendalarNekoUI then
+		environment.CaelusPendalarNekoUI:DisconnectFling()
+	end
 	cleanupShadow()
 	disconnectArray(self.connections)
 	if self.gui and self.gui.Parent then self.gui:Destroy() end
