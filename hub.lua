@@ -4845,33 +4845,8 @@ local PENDALAR_SCRIPTS = {
 		Description = "Follow a selected player with an R6 animation",
 		Source = [=[
 local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
 local LocalPlayer = Players.LocalPlayer
-local RuntimeEnvironment =
-	(type(getgenv) == "function" and getgenv()) or _G
-
-local previousRuntime = RuntimeEnvironment.CaelusR6FollowRuntime
-
-if type(previousRuntime) == "table"
-	and type(previousRuntime.Destroy) == "function"
-then
-	pcall(function()
-		previousRuntime:Destroy()
-	end)
-end
-
-local Runtime = {
-	Destroyed = false,
-	Following = false,
-	Connections = {},
-	FollowToken = 0,
-}
-
-RuntimeEnvironment.CaelusR6FollowRuntime = Runtime
-
-local function remember(connection)
-	table.insert(Runtime.Connections, connection)
-	return connection
-end
 
 local guiParent = game:GetService("CoreGui")
 
@@ -4901,9 +4876,9 @@ MainFrame.BorderSizePixel = 0
 MainFrame.Active = true
 MainFrame.Draggable = true
 
-local MainCorner = Instance.new("UICorner")
-MainCorner.CornerRadius = UDim.new(0, 20)
-MainCorner.Parent = MainFrame
+local UICorner = Instance.new("UICorner")
+UICorner.Parent = MainFrame
+UICorner.CornerRadius = UDim.new(0, 20)
 
 local TitleBar = Instance.new("Frame")
 TitleBar.Parent = MainFrame
@@ -4915,9 +4890,9 @@ local TitleLabel = Instance.new("TextLabel")
 TitleLabel.Parent = TitleBar
 TitleLabel.Size = UDim2.new(0, 120, 1, 0)
 TitleLabel.Position = UDim2.new(0, 5, 0, 0)
-TitleLabel.BackgroundTransparency = 1
 TitleLabel.Text = "R6 Follow"
 TitleLabel.TextColor3 = Color3.new(1, 1, 1)
+TitleLabel.BackgroundTransparency = 1
 TitleLabel.TextSize = 14
 
 local CloseButton = Instance.new("TextButton")
@@ -4957,68 +4932,52 @@ ToggleButton.TextColor3 = Color3.new(1, 1, 1)
 ToggleButton.BackgroundColor3 = Color3.fromRGB(70, 130, 180)
 ToggleButton.BorderSizePixel = 0
 
+local following = false
 local targetPlayer
 local activeAnimation
-local animationObject
-
-local function stopAnimation()
-	if activeAnimation then
-		pcall(function()
-			activeAnimation:Stop(0.1)
-		end)
-		activeAnimation = nil
-	end
-
-	if animationObject then
-		animationObject:Destroy()
-		animationObject = nil
-	end
-end
+local followConnection
 
 local function stopFollowing()
-	Runtime.Following = false
-	Runtime.FollowToken = Runtime.FollowToken + 1
+	following = false
 	ToggleButton.Text = "Start"
-	stopAnimation()
+
+	if followConnection then
+		followConnection:Disconnect()
+		followConnection = nil
+	end
+
+	if activeAnimation then
+		activeAnimation:Stop()
+		activeAnimation = nil
+	end
 
 	local character = LocalPlayer.Character
 	local humanoid =
 		character and character:FindFirstChildOfClass("Humanoid")
 
 	if humanoid then
-		pcall(function()
-			humanoid:Move(Vector3.zero, false)
-			humanoid:MoveTo(
-				character:GetPivot().Position
-			)
-		end)
+		humanoid:Move(Vector3.zero, false)
 	end
 end
 
-function Runtime:Destroy()
-	if self.Destroyed then
-		return
-	end
-
-	self.Destroyed = true
+CloseButton.MouseButton1Click:Connect(function()
 	stopFollowing()
+	ScreenGui:Destroy()
+end)
 
-	for _, connection in ipairs(self.Connections) do
-		pcall(function()
-			connection:Disconnect()
-		end)
+local minimized = false
+
+MinimizeButton.MouseButton1Click:Connect(function()
+	minimized = not minimized
+
+	if minimized then
+		MainFrame.Size = UDim2.new(0, 300, 0, 25)
+		MinimizeButton.Text = "Show"
+	else
+		MainFrame.Size = UDim2.new(0, 300, 0, 150)
+		MinimizeButton.Text = "Hide"
 	end
-
-	table.clear(self.Connections)
-
-	if ScreenGui and ScreenGui.Parent then
-		ScreenGui:Destroy()
-	end
-
-	if RuntimeEnvironment.CaelusR6FollowRuntime == self then
-		RuntimeEnvironment.CaelusR6FollowRuntime = nil
-	end
-end
+end)
 
 local function findTarget(query)
 	query = string.lower(query)
@@ -5035,8 +4994,6 @@ local function findTarget(query)
 			end
 		end
 	end
-
-	return nil
 end
 
 local function playAnimation()
@@ -5044,157 +5001,85 @@ local function playAnimation()
 	local humanoid =
 		character and character:FindFirstChildOfClass("Humanoid")
 
-	if not humanoid or humanoid.Health <= 0 then
-		return false, "Character is not ready."
+	if not humanoid then
+		return
 	end
 
 	local animator =
 		humanoid:FindFirstChildOfClass("Animator")
+		or Instance.new("Animator", humanoid)
 
-	if not animator then
-		animator = Instance.new("Animator")
-		animator.Parent = humanoid
-	end
+	local animation = Instance.new("Animation")
+	animation.AnimationId = "rbxassetid://189854234"
 
-	animationObject = Instance.new("Animation")
-	animationObject.AnimationId = "rbxassetid://189854234"
-
-	local ok, trackOrProblem = pcall(function()
-		return animator:LoadAnimation(animationObject)
-	end)
-
-	if not ok then
-		animationObject:Destroy()
-		animationObject = nil
-		return false, tostring(trackOrProblem)
-	end
-
-	activeAnimation = trackOrProblem
-
-	pcall(function()
-		activeAnimation.Looped = true
-		activeAnimation.Priority = Enum.AnimationPriority.Action
-		activeAnimation:Play(0.1)
-	end)
-
-	return true
+	activeAnimation = animator:LoadAnimation(animation)
+	activeAnimation:Play()
 end
 
 local function startFollowing()
 	local character = LocalPlayer.Character
 	local humanoid =
 		character and character:FindFirstChildOfClass("Humanoid")
-	local root =
-		character and character:FindFirstChild("HumanoidRootPart")
 
-	if not humanoid
-		or humanoid.Health <= 0
-		or not root
-	then
-		return false, "Your character is not ready."
+	if not humanoid or humanoid.Health <= 0 then
+		return false
 	end
 
-	local targetCharacter = targetPlayer and targetPlayer.Character
-	local targetHumanoid =
-		targetCharacter
-		and targetCharacter:FindFirstChildOfClass("Humanoid")
-	local targetRoot =
-		targetCharacter
-		and targetCharacter:FindFirstChild("HumanoidRootPart")
+	followConnection = RunService.Heartbeat:Connect(function()
+		if not following then
+			return
+		end
 
-	if not targetHumanoid
-		or targetHumanoid.Health <= 0
-		or not targetRoot
-	then
-		return false, "Target character is not ready."
-	end
+		local localCharacter = LocalPlayer.Character
+		local localHumanoid =
+			localCharacter
+			and localCharacter:FindFirstChildOfClass("Humanoid")
+		local localRoot =
+			localCharacter
+			and localCharacter:FindFirstChild("HumanoidRootPart")
 
-	Runtime.Following = true
-	Runtime.FollowToken = Runtime.FollowToken + 1
-	local token = Runtime.FollowToken
-	ToggleButton.Text = "Stop"
+		local targetCharacter =
+			targetPlayer and targetPlayer.Character
+		local targetHumanoid =
+			targetCharacter
+			and targetCharacter:FindFirstChildOfClass("Humanoid")
+		local targetRoot =
+			targetCharacter
+			and targetCharacter:FindFirstChild("HumanoidRootPart")
 
-	task.spawn(function()
-		while Runtime.Following
-			and not Runtime.Destroyed
-			and Runtime.FollowToken == token
-		do
-			local localCharacter = LocalPlayer.Character
-			local localHumanoid =
-				localCharacter
-				and localCharacter:FindFirstChildOfClass("Humanoid")
-			local localRoot =
-				localCharacter
-				and localCharacter:FindFirstChild("HumanoidRootPart")
+		if not localHumanoid
+			or localHumanoid.Health <= 0
+			or not localRoot
+			or not targetHumanoid
+			or targetHumanoid.Health <= 0
+			or not targetRoot
+		then
+			stopFollowing()
+			return
+		end
 
-			local currentTargetCharacter =
-				targetPlayer and targetPlayer.Character
-			local currentTargetHumanoid =
-				currentTargetCharacter
-				and currentTargetCharacter:FindFirstChildOfClass(
-					"Humanoid"
-				)
-			local currentTargetRoot =
-				currentTargetCharacter
-				and currentTargetCharacter:FindFirstChild(
-					"HumanoidRootPart"
-				)
+		local desiredPosition =
+			targetRoot.Position
+			- targetRoot.CFrame.LookVector * 5
 
-			if not localHumanoid
-				or localHumanoid.Health <= 0
-				or not localRoot
-				or not currentTargetHumanoid
-				or currentTargetHumanoid.Health <= 0
-				or not currentTargetRoot
-			then
-				stopFollowing()
-				break
-			end
+		local offset = desiredPosition - localRoot.Position
+		local flatOffset = Vector3.new(offset.X, 0, offset.Z)
+		local distance = flatOffset.Magnitude
 
-			local desiredPosition =
-				currentTargetRoot.Position
-				- currentTargetRoot.CFrame.LookVector * 4
-
-			local distance =
-				(localRoot.Position - desiredPosition).Magnitude
-
-			if distance > 3 then
-				pcall(function()
-					localHumanoid:MoveTo(desiredPosition)
-				end)
-			else
-				pcall(function()
-					localHumanoid:Move(Vector3.zero, false)
-				end)
-			end
-
-			task.wait(0.12)
+		if distance > 6 then
+			localHumanoid:Move(flatOffset.Unit, false)
+		elseif distance < 3.5 then
+			localHumanoid:Move(-flatOffset.Unit, false)
+		else
+			localHumanoid:Move(Vector3.zero, false)
 		end
 	end)
 
 	return true
 end
 
-remember(CloseButton.MouseButton1Click:Connect(function()
-	Runtime:Destroy()
-end))
-
-local minimized = false
-
-remember(MinimizeButton.MouseButton1Click:Connect(function()
-	minimized = not minimized
-
-	if minimized then
-		MainFrame.Size = UDim2.new(0, 300, 0, 25)
-		MinimizeButton.Text = "Show"
-	else
-		MainFrame.Size = UDim2.new(0, 300, 0, 150)
-		MinimizeButton.Text = "Hide"
-	end
-end))
-
-remember(ToggleButton.MouseButton1Click:Connect(function()
-	if Runtime.Following then
+ToggleButton.MouseButton1Click:Connect(function()
+	if following then
 		stopFollowing()
 		return
 	end
@@ -5213,26 +5098,20 @@ remember(ToggleButton.MouseButton1Click:Connect(function()
 		return
 	end
 
-	local animationReady, animationProblem = playAnimation()
+	following = true
+	ToggleButton.Text = "Stop"
 
-	if not animationReady and animationProblem then
-		warn(
-			"[R6 Follow] Animation skipped: "
-				.. tostring(animationProblem)
-		)
-	end
+	playAnimation()
 
-	local started, startProblem = startFollowing()
-
-	if not started then
+	if not startFollowing() then
 		stopFollowing()
-		warn("[R6 Follow] " .. tostring(startProblem))
+		warn("[R6 Follow] Character is not ready.")
 	end
-end))
+end)
 
-remember(LocalPlayer.CharacterAdded:Connect(function()
+LocalPlayer.CharacterAdded:Connect(function()
 	stopFollowing()
-end))
+end)
 ]=],
 	},
 }
@@ -6079,32 +5958,6 @@ function environment.CaelusPendalarNekoUI:Build()
 		self.FlingEnabled
 	)
 
-	settingsTab:NewButton(
-		"R6 Follow Animation",
-		"Open the built-in R6 follow animation tool",
-		function()
-			local entry = self.Scripts[1]
-
-			if not entry
-				or entry.Name ~= "R6 Follow Animation"
-			then
-				warn(
-					"[Pendalar Hub] R6 Follow script entry "
-						.. "was not found."
-				)
-				return
-			end
-
-			local ran, problem = self:RunScript(entry)
-
-			if not ran then
-				warn(
-					"[Pendalar Hub] "
-						.. tostring(problem)
-				)
-			end
-		end
-	)
 
 	editorTab:NewLabel("Custom Neko Editor")
 
