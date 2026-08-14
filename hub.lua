@@ -2499,9 +2499,12 @@ function environment.CaelusLegacyNekoConfig:runCustomController(
 		if ok and type(moduleOrProblem) == "table"
 			and type(moduleOrProblem.advneko) == "function"
 		then
+			-- Melanie's original MainModule resolves the player with
+			-- Players:WaitForChild(Plr), so its API expects the player's name
+			-- rather than the Player instance used by the rest of this hub.
 			local started, startProblem = pcall(
 				moduleOrProblem.advneko,
-				player
+				player.Name
 			)
 
 			if started then
