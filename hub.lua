@@ -1,6 +1,6 @@
 -- File: LOAD_NEKO_SHADOW_CUSTOM_3_27_PERSISTENT_PRESETS.lua
--- Caelus Neko Hub Runtime 3.32.1 Brazil Miku Fixes
--- Adds Brazil Miku while preserving the built-in Fling, safe Follow, and Direct Wear fixes.
+-- Caelus Neko Hub Runtime 3.32.2 Single Pendalar Window
+-- Prevents overlapping loader runs from creating duplicate Pendalar windows.
 
 if not game:IsLoaded() then
 	game.Loaded:Wait()
@@ -14,13 +14,17 @@ local Debris = game:GetService("Debris")
 local HttpService = game:GetService("HttpService")
 
 local environment = (type(getgenv) == "function" and getgenv()) or _G
-local RUNTIME_VERSION = "3.32.1-brazil-miku-fixes"
+local RUNTIME_VERSION = "3.32.2-single-pendalar-window"
 
 local function startupLog(message)
 	pcall(function()
 		print("[Caelus Neko " .. RUNTIME_VERSION .. "] " .. tostring(message))
 	end)
 end
+
+-- startupLog is a unique function object for this execution, so it also acts
+-- as a generation token without consuming another top-level local slot.
+environment.CaelusNekoHubLaunchToken = startupLog
 
 local function waitForLocalPlayer(timeoutSeconds)
 	local deadline = os.clock() + timeoutSeconds
@@ -72,7 +76,7 @@ do
 	label.Font = Enum.Font.GothamSemibold
 	label.TextColor3 = Color3.fromRGB(245, 245, 245)
 	label.TextSize = 13
-	label.Text = "Caelus Neko 3.32: starting..."
+	label.Text = "Caelus Neko 3.32.2: starting..."
 	label.Parent = bootGui
 
 	local corner = Instance.new("UICorner")
@@ -95,7 +99,7 @@ environment.CaelusNekoBootStatus = function(message, failed)
 	startupLog(message)
 end
 
-environment.CaelusNekoBootStatus("Caelus Neko 3.32: player ready")
+environment.CaelusNekoBootStatus("Caelus Neko 3.32.2: player ready")
 local ARMOR_OFF_TEMPLATE = "rbxassetid://0"
 local LOWER_BELT_NAMES = {"BeltBase", "BeltLayer", "BeltBack", "BeltCover"}
 local LOWER_REAR_ACCESSORY_NAMES = {"RearAccessoryRight", "RearAccessoryLeft"}
@@ -193,7 +197,7 @@ local function getObjectsWithRetry(uri, attempts)
 	return nil, lastProblem
 end
 
-environment.CaelusNekoBootStatus("Caelus Neko 3.32: loading assets...")
+environment.CaelusNekoBootStatus("Caelus Neko 3.32.2: loading assets...")
 
 local catalog = nil
 local catalogUri = nil
@@ -247,7 +251,7 @@ if not catalog then
 	)
 end
 
-environment.CaelusNekoBootStatus("Caelus Neko 3.32: assets ready")
+environment.CaelusNekoBootStatus("Caelus Neko 3.32.2: assets ready")
 startupLog("Asset catalog ready: " .. tostring(catalogUri))
 
 local menuTemplate = catalog:FindFirstChild("CaelusNekoOriginalMenu")
@@ -375,7 +379,7 @@ end
 
 local gui = menuTemplate
 gui.Parent = playerGui
-environment.CaelusNekoBootStatus("Caelus Neko 3.32: building menu...")
+environment.CaelusNekoBootStatus("Caelus Neko 3.32.2: building menu...")
 local main = gui:FindFirstChild("Frame")
 local selectionTabs = main and main:FindFirstChild("selection tabs")
 local morphList = selectionTabs and selectionTabs:FindFirstChild("ScrollingFrame")
@@ -412,6 +416,12 @@ main.Active = true
 main.Draggable = true
 if selectedCaption and selectedCaption:IsA("TextLabel") then selectedCaption.Text = "Neko Selected:" end
 keysButton.Text = "Keys"
+
+if environment.CaelusNekoHubLaunchToken ~= startupLog then
+	gui:Destroy()
+	catalog:Destroy()
+	return
+end
 
 local state = {
 	catalog = catalog,
@@ -4839,6 +4849,28 @@ if type(environment.PendalarNekoRequest) == "table" then
 	end
 end
 
+if environment.CaelusNekoHubLaunchToken ~= startupLog then
+	cleanupShadow()
+	disconnectArray(state.connections)
+	if gui and gui.Parent then gui:Destroy() end
+	if catalog and catalog.Parent then catalog:Destroy() end
+	if environment.CaelusNekoOriginalRuntimeSession == state then
+		environment.CaelusNekoOriginalRuntimeSession = nil
+	end
+	if environment.CaelusNekoOriginalSession == state then
+		environment.CaelusNekoOriginalSession = nil
+	end
+	if environment.CaelusNekoShadowSession == state then
+		environment.CaelusNekoShadowSession = nil
+	end
+	if environment.CaelusNekoAPI
+		and environment.CaelusNekoAPI.Session == state
+	then
+		environment.CaelusNekoAPI = nil
+	end
+	return
+end
+
 local PENDALAR_SCRIPTS = {
 	{
 		Name = "R6 Follow Animation",
@@ -4853,6 +4885,7 @@ loadstring(game:HttpGet(
 
 environment.CaelusPendalarNekoUI = {
 	Session = state,
+	LaunchToken = startupLog,
 	Window = nil,
 	GuiRoot = nil,
 	BuildStarted = false,
@@ -4872,6 +4905,7 @@ environment.CaelusPendalarNekoUI = {
 	LibraryUrl =
 		"https://raw.githubusercontent.com/shidemuri/scripts/main/newuilib.lua",
 }
+state.pendalarUI = environment.CaelusPendalarNekoUI
 
 function environment.CaelusPendalarNekoUI:Fetch(url)
 	local ok, body = pcall(function()
@@ -5569,25 +5603,31 @@ function environment.CaelusPendalarNekoUI:SaveEditor()
 	self.EditorStatus.Text = "Saved : " .. tostring(result)
 end
 
-function environment.CaelusPendalarNekoUI:DestroyExistingWindow()
-	if self.GuiRoot and self.GuiRoot.Parent then
+function environment.CaelusPendalarNekoUI:DestroyExistingWindow(keep)
+	if self.GuiRoot
+		and self.GuiRoot ~= keep
+		and self.GuiRoot.Parent
+	then
 		pcall(function()
 			self.GuiRoot:Destroy()
 		end)
 	end
 
-	self.GuiRoot = nil
-	self.Window = nil
+	if not keep then
+		self.GuiRoot = nil
+		self.Window = nil
+	end
 
 	for _, root in ipairs(self:GetGuiRoots()) do
 		for _, child in ipairs(root:GetChildren()) do
-			if child:IsA("ScreenGui") then
+			if child:IsA("ScreenGui") and child ~= keep then
 				local normalized = string.lower(
 					tostring(child.Name or "")
 				)
 
-				if normalized:find("pendulum", 1, true)
-					or normalized:find("pendalar", 1, true)
+				if child:GetAttribute("CaelusPendalarHub") == true
+					or normalized == "pendulum hub"
+					or normalized == "pendalar hub"
 				then
 					pcall(function()
 						child:Destroy()
@@ -5598,10 +5638,19 @@ function environment.CaelusPendalarNekoUI:DestroyExistingWindow()
 	end
 end
 
-function environment.CaelusPendalarNekoUI:FindCreatedGui(before)
+function environment.CaelusPendalarNekoUI:FindCreatedGui(
+	before,
+	expectedName
+)
 	for _, root in ipairs(self:GetGuiRoots()) do
 		for _, child in ipairs(root:GetChildren()) do
-			if child:IsA("ScreenGui") and not before[child] then
+			if child:IsA("ScreenGui")
+				and not before[child]
+				and (
+					not expectedName
+					or child.Name == expectedName
+				)
+			then
 				return child
 			end
 		end
@@ -5611,22 +5660,16 @@ function environment.CaelusPendalarNekoUI:FindCreatedGui(before)
 end
 
 function environment.CaelusPendalarNekoUI:Build()
+	if environment.CaelusNekoHubLaunchToken ~= self.LaunchToken then
+		return false, "A newer Neko Hub launch superseded this one."
+	end
+
 	if self.BuildStarted then
 		return true
 	end
 
 	self.BuildStarted = true
 	self:DestroyExistingWindow()
-
-	local guiBefore = {}
-
-	for _, root in ipairs(self:GetGuiRoots()) do
-		for _, child in ipairs(root:GetChildren()) do
-			if child:IsA("ScreenGui") then
-				guiBefore[child] = true
-			end
-		end
-	end
 	local flingOk, flingProblem = self:LoadOriginalTouchFling()
 
 	if not flingOk then
@@ -5645,6 +5688,25 @@ function environment.CaelusPendalarNekoUI:Build()
 
 	local recolorCount
 	sourceText, recolorCount = self:Recolor(sourceText)
+	if not sourceText:find(
+		'local ScreenGui = Instance.new("ScreenGui")',
+		1,
+		true
+	) then
+		local screenGuiPatchCount
+		sourceText, screenGuiPatchCount = self:ReplacePlain(
+			sourceText,
+			'ScreenGui = Instance.new("ScreenGui")',
+			'local ScreenGui = Instance.new("ScreenGui")'
+		)
+
+		if screenGuiPatchCount == 0 then
+			warn(
+				"[Pendalar Hub] UI library ScreenGui declaration "
+					.. "could not be isolated."
+			)
+		end
+	end
 
 	if recolorCount == 0 then
 		warn(
@@ -5680,10 +5742,34 @@ function environment.CaelusPendalarNekoUI:Build()
 		return false, "Pendalar UI library returned an invalid object."
 	end
 
-	local window = library:New("Pendalar Hub")
-	task.wait()
+	if environment.CaelusNekoHubLaunchToken ~= self.LaunchToken then
+		return false, "A newer Neko Hub launch superseded this one."
+	end
 
-	self.GuiRoot = self:FindCreatedGui(guiBefore)
+	-- Capture immediately before New(). The hidden Fling GUI has already been
+	-- created, so it cannot be mistaken for the Pendalar window.
+	self:DestroyExistingWindow()
+	local guiBefore = {}
+
+	for _, root in ipairs(self:GetGuiRoots()) do
+		for _, child in ipairs(root:GetChildren()) do
+			if child:IsA("ScreenGui") then
+				guiBefore[child] = true
+			end
+		end
+	end
+
+	local window = library:New("Pendalar Hub")
+	self.GuiRoot = self:FindCreatedGui(guiBefore, "Pendalar Hub")
+
+	if not self.GuiRoot then
+		self:DestroyExistingWindow()
+		return false, "Pendalar Hub ScreenGui was not created."
+	end
+
+	self.GuiRoot:SetAttribute("CaelusPendalarHub", true)
+	self.GuiRoot:SetAttribute("CaelusNekoRuntimeVersion", RUNTIME_VERSION)
+	self:DestroyExistingWindow(self.GuiRoot)
 	local nekosTab = window:NewTab("Nekos")
 	local settingsTab = window:NewTab("Settings")
 	local editorTab = window:NewTab("Neko Editor")
@@ -5879,7 +5965,7 @@ function environment.CaelusPendalarNekoUI:Build()
 	creditsTab:NewLabel("melanie070910")
 
 	window:SetMainTab(nekosTab)
-	window:SetFooter("Current Version : 3.32")
+	window:SetFooter("Current Version : 3.32.2")
 
 	self.Window = window
 
@@ -5891,11 +5977,39 @@ function environment.CaelusPendalarNekoUI:Build()
 end
 
 state.pendalarUiOk, state.pendalarUiProblem =
-	environment.CaelusPendalarNekoUI:Build()
+	state.pendalarUI:Build()
+
+if not state.pendalarUiOk
+	and environment.CaelusNekoHubLaunchToken
+		~= state.pendalarUI.LaunchToken
+then
+	cleanupShadow()
+	disconnectArray(state.connections)
+	if gui and gui.Parent then gui:Destroy() end
+	if catalog and catalog.Parent then catalog:Destroy() end
+	if environment.CaelusNekoOriginalRuntimeSession == state then
+		environment.CaelusNekoOriginalRuntimeSession = nil
+	end
+	if environment.CaelusNekoOriginalSession == state then
+		environment.CaelusNekoOriginalSession = nil
+	end
+	if environment.CaelusNekoShadowSession == state then
+		environment.CaelusNekoShadowSession = nil
+	end
+	if environment.CaelusNekoAPI
+		and environment.CaelusNekoAPI.Session == state
+	then
+		environment.CaelusNekoAPI = nil
+	end
+	if environment.CaelusPendalarNekoUI == state.pendalarUI then
+		environment.CaelusPendalarNekoUI = nil
+	end
+	return
+end
 
 if not state.pendalarUiOk then
-	if environment.CaelusPendalarNekoUI then
-		environment.CaelusPendalarNekoUI.BuildStarted = false
+	if state.pendalarUI then
+		state.pendalarUI.BuildStarted = false
 	end
 
 	warn(
@@ -5952,14 +6066,17 @@ function state:Destroy()
 	if self.destroyed then return end
 	self.destroyed = true
 
-	if environment.CaelusPendalarNekoUI then
-		if environment.CaelusPendalarNekoUI.FlingEnabled then
-			environment.CaelusPendalarNekoUI:SetOriginalTouchFling(false)
+	local pendalarUI =
+		self.pendalarUI or environment.CaelusPendalarNekoUI
+
+	if type(pendalarUI) == "table" then
+		if pendalarUI.FlingEnabled then
+			pendalarUI:SetOriginalTouchFling(false)
 		end
 
-		if environment.CaelusPendalarNekoUI.FlingHideConnection then
-			environment.CaelusPendalarNekoUI.FlingHideConnection:Disconnect()
-			environment.CaelusPendalarNekoUI.FlingHideConnection = nil
+		if pendalarUI.FlingHideConnection then
+			pendalarUI.FlingHideConnection:Disconnect()
+			pendalarUI.FlingHideConnection = nil
 		end
 	end
 
@@ -5980,13 +6097,16 @@ function state:Destroy()
 	if environment.CaelusNekoAPI and environment.CaelusNekoAPI.Session == self then
 		environment.CaelusNekoAPI = nil
 	end
-	if environment.CaelusPendalarNekoUI
-		and environment.CaelusPendalarNekoUI.Session == self
+	if type(pendalarUI) == "table"
+		and pendalarUI.Session == self
 	then
-		environment.CaelusPendalarNekoUI:DestroyExistingWindow()
-		environment.CaelusPendalarNekoUI.BuildStarted = false
-		environment.CaelusPendalarNekoUI = nil
+		pendalarUI:DestroyExistingWindow()
+		pendalarUI.BuildStarted = false
+		if environment.CaelusPendalarNekoUI == pendalarUI then
+			environment.CaelusPendalarNekoUI = nil
+		end
 	end
+	self.pendalarUI = nil
 end
 
 selectedText.Text = "???"
@@ -5994,7 +6114,7 @@ selectedValue.Value = ""
 rebuildKeyPanel("V4")
 
 if type(environment.CaelusNekoBootStatus) == "function" then
-	environment.CaelusNekoBootStatus("Caelus Neko 3.32: ready")
+	environment.CaelusNekoBootStatus("Caelus Neko 3.32.2: ready")
 end
 task.delay(0.35, function()
 	local bootGui = environment.CaelusNekoBootGui
