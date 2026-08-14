@@ -462,6 +462,48 @@ local function remember(connection)
 	return connection
 end
 
+morphList.Active = true
+morphList.ScrollingEnabled = true
+morphList.ScrollingDirection = Enum.ScrollingDirection.Y
+morphList.AutomaticCanvasSize = Enum.AutomaticSize.None
+
+environment.CaelusLegacyNekoConfig.refreshMorphCanvas = function()
+	if not (morphList and morphList.Parent) then
+		return
+	end
+
+	local contentBottom = morphList.AbsoluteSize.Y
+
+	for _, child in ipairs(morphList:GetChildren()) do
+		if child:IsA("GuiObject") and child.Visible then
+			local childBottom =
+				child.AbsolutePosition.Y
+				- morphList.AbsolutePosition.Y
+				+ morphList.CanvasPosition.Y
+				+ child.AbsoluteSize.Y
+
+			contentBottom = math.max(contentBottom, childBottom)
+		end
+	end
+
+	morphList.CanvasSize = UDim2.fromOffset(
+		0,
+		math.ceil(contentBottom + 28)
+	)
+end
+
+remember(morphList.ChildAdded:Connect(function()
+	task.defer(environment.CaelusLegacyNekoConfig.refreshMorphCanvas)
+end))
+
+remember(morphList.ChildRemoved:Connect(function()
+	task.defer(environment.CaelusLegacyNekoConfig.refreshMorphCanvas)
+end))
+
+remember(morphList:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
+	task.defer(environment.CaelusLegacyNekoConfig.refreshMorphCanvas)
+end))
+
 local function rememberFollow(connection)
 	table.insert(state.followConnections, connection)
 	return connection
@@ -1512,6 +1554,7 @@ local initialCanvasScale = math.max(
 		+ 0.15
 )
 morphList.CanvasSize = UDim2.new(0, 0, initialCanvasScale, 0)
+task.defer(environment.CaelusLegacyNekoConfig.refreshMorphCanvas)
 
 
 local customPanel = Instance.new("Frame")
@@ -1924,6 +1967,7 @@ local function refreshPresetButtons()
 			+ 0.15
 	)
 	morphList.CanvasSize = UDim2.new(0, 0, neededScale, 0)
+	task.defer(environment.CaelusLegacyNekoConfig.refreshMorphCanvas)
 end
 
 refreshPresetButtons()
