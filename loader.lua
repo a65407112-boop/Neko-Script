@@ -1,5 +1,5 @@
 -- File: loader.lua
--- Caelus Neko Hub 3.32.1 Brazil Miku Fixes
+-- Caelus Neko Hub 3.32.2 Single Pendalar Window
 --
 -- Upload this file, hub.lua, and the .rbxm/.rbxmx assets to the repo root.
 -- Repository: a65407112-boop/Neko-Script
@@ -9,7 +9,7 @@ local BASE_URL =
 	"https://raw.githubusercontent.com/a65407112-boop/Neko-Script/main"
 
 if BASE_URL == "" then
-	error("[Caelus Neko 3.32.1] BASE_URL is empty.", 0)
+	error("[Caelus Neko 3.32.2] BASE_URL is empty.", 0)
 end
 
 BASE_URL = BASE_URL:gsub("/+$", "")
@@ -23,7 +23,7 @@ local environment = (type(getgenv) == "function" and getgenv()) or _G
 
 local CACHE_ROOT = "CaelusNekoHub"
 local CACHE_FOLDER = CACHE_ROOT .. "/RemoteCache"
-local VERSION_FOLDER = CACHE_FOLDER .. "/3_32_1"
+local VERSION_FOLDER = CACHE_FOLDER .. "/3_32_2"
 local ASSET_FOLDER = VERSION_FOLDER .. "/assets"
 local HUB_CACHE_PATH = VERSION_FOLDER .. "/hub.lua"
 
@@ -34,6 +34,10 @@ local function getFunction(name)
 	end
 	return nil
 end
+
+-- The function object is unique to this loader execution. A newer execution
+-- replaces the token before either copy can launch a second hub.
+environment.CaelusNekoLoaderToken = getFunction
 
 local function requestFunction()
 	for _, name in ipairs({"request", "http_request", "httprequest"}) do
@@ -146,7 +150,7 @@ local function fetch(url, attempts)
 			end
 		else
 			local ok, body = pcall(function()
-				return game:HttpGet(url .. "?v=332")
+				return game:HttpGet(url .. "?v=3322")
 			end)
 
 			if ok and type(body) == "string" and #body > 0 then
@@ -192,7 +196,7 @@ end
 local resolver = localAssetResolver()
 if not resolver then
 	error(
-		"[Caelus Neko 3.32.1] This executor has no "
+		"[Caelus Neko 3.32.2] This executor has no "
 			.. "getcustomasset/getsynasset/getasset support.",
 		0
 	)
@@ -201,14 +205,14 @@ end
 local folderOk, folderProblem = ensureFolder(ASSET_FOLDER)
 if not folderOk then
 	error(
-		"[Caelus Neko 3.32.1] Could not create cache folder: "
+		"[Caelus Neko 3.32.2] Could not create cache folder: "
 			.. tostring(folderProblem),
 		0
 	)
 end
 
 local runtime = {
-	version = "3.32-brazil-miku",
+	version = "3.32.2-single-pendalar-window",
 	baseUrl = BASE_URL,
 	assetFolder = ASSET_FOLDER,
 }
@@ -224,7 +228,7 @@ function runtime:getAssetUri(fileName)
 	local cachePath = self.assetFolder .. "/" .. fileName
 
 	if not fileExists(cachePath) then
-		print("[Caelus Neko 3.32.1] Downloading " .. fileName .. "...")
+		print("[Caelus Neko 3.32.2] Downloading " .. fileName .. "...")
 
 		local body, downloadProblem = fetch(
 			self.baseUrl .. "/" .. fileName,
@@ -257,6 +261,10 @@ function runtime:getAssetUri(fileName)
 	return uri, nil
 end
 
+if environment.CaelusNekoLoaderToken ~= getFunction then
+	return
+end
+
 environment.CaelusRemoteAssetRuntime = runtime
 
 local hubSource
@@ -267,7 +275,7 @@ if downloaded then
 	hubSource = downloaded
 	local saved = writeCache(HUB_CACHE_PATH, hubSource)
 	if not saved then
-		warn("[Caelus Neko 3.32.1] Could not update cached hub.lua")
+		warn("[Caelus Neko 3.32.2] Could not update cached hub.lua")
 	end
 else
 	hubProblem = downloadProblem
@@ -278,7 +286,7 @@ else
 		if ok and type(cached) == "string" and #cached > 100 then
 			hubSource = cached
 			warn(
-				"[Caelus Neko 3.32.1] GitHub unavailable; "
+				"[Caelus Neko 3.32.2] GitHub unavailable; "
 					.. "using cached hub.lua"
 			)
 		end
@@ -287,20 +295,24 @@ end
 
 if not hubSource then
 	error(
-		"[Caelus Neko 3.32.1] Could not download hub.lua and no cache exists: "
+		"[Caelus Neko 3.32.2] Could not download hub.lua and no cache exists: "
 			.. tostring(hubProblem),
 		0
 	)
 end
 
 if type(loadstring) ~= "function" then
-	error("[Caelus Neko 3.32.1] loadstring() is unavailable.", 0)
+	error("[Caelus Neko 3.32.2] loadstring() is unavailable.", 0)
 end
 
-local chunk, compileProblem = loadstring(hubSource, "=CaelusNekoHub3.32.1")
+if environment.CaelusNekoLoaderToken ~= getFunction then
+	return
+end
+
+local chunk, compileProblem = loadstring(hubSource, "=CaelusNekoHub3.32.2")
 if not chunk then
 	error(
-		"[Caelus Neko 3.32.1] hub.lua compile failed: "
+		"[Caelus Neko 3.32.2] hub.lua compile failed: "
 			.. tostring(compileProblem),
 		0
 	)
@@ -309,7 +321,7 @@ end
 local ok, runtimeProblem = pcall(chunk)
 if not ok then
 	error(
-		"[Caelus Neko 3.32.1] hub.lua runtime failed: "
+		"[Caelus Neko 3.32.2] hub.lua runtime failed: "
 			.. tostring(runtimeProblem),
 		0
 	)
