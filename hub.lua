@@ -4110,6 +4110,217 @@ if type(environment.PendalarNekoRequest) == "table" then
 	end
 end
 
+environment.CaelusPendalarNekoUI = {
+	Session = state,
+	Window = nil,
+	LibraryUrl =
+		"https://raw.githubusercontent.com/shidemuri/scripts/main/newuilib.lua",
+}
+
+function environment.CaelusPendalarNekoUI:Fetch(url)
+	local ok, body = pcall(function()
+		return game:HttpGet(url)
+	end)
+
+	if ok and type(body) == "string" and body ~= "" then
+		return body
+	end
+
+	return nil, tostring(body or "HTTP request failed")
+end
+
+function environment.CaelusPendalarNekoUI:ReplacePlain(sourceText, from, to)
+	local parts = {}
+	local startIndex = 1
+	local count = 0
+
+	while true do
+		local first, last = string.find(
+			sourceText,
+			from,
+			startIndex,
+			true
+		)
+
+		if not first then
+			table.insert(parts, string.sub(sourceText, startIndex))
+			break
+		end
+
+		table.insert(parts, string.sub(sourceText, startIndex, first - 1))
+		table.insert(parts, to)
+
+		count = count + 1
+		startIndex = last + 1
+	end
+
+	return table.concat(parts), count
+end
+
+function environment.CaelusPendalarNekoUI:Recolor(sourceText)
+	local replacements = {
+		{
+			"Color3.fromRGB(38, 45, 71)",
+			"Color3.fromRGB(166, 58, 99)",
+		},
+		{
+			"Color3.fromRGB(26, 32, 58)",
+			"Color3.fromRGB(137, 43, 79)",
+		},
+		{
+			"Color3.fromRGB(26,32,58)",
+			"Color3.fromRGB(137,43,79)",
+		},
+		{
+			"Color3.fromRGB(69, 69, 107)",
+			"Color3.fromRGB(194, 73, 115)",
+		},
+		{
+			"Color3.fromRGB(103, 103, 158)",
+			"Color3.fromRGB(219, 110, 149)",
+		},
+		{
+			"Color3.fromRGB(100, 100, 156)",
+			"Color3.fromRGB(208, 97, 137)",
+		},
+		{
+			"Color3.fromRGB(53, 53, 82)",
+			"Color3.fromRGB(126, 38, 70)",
+		},
+		{
+			"Color3.fromRGB(102, 61, 255)",
+			"Color3.fromRGB(255, 110, 173)",
+		},
+		{
+			"Color3.fromRGB(70, 70, 224)",
+			"Color3.fromRGB(221, 107, 145)",
+		},
+	}
+	local total = 0
+
+	for _, replacement in ipairs(replacements) do
+		local count
+
+		sourceText, count = self:ReplacePlain(
+			sourceText,
+			replacement[1],
+			replacement[2]
+		)
+
+		total = total + count
+	end
+
+	return sourceText, total
+end
+
+function environment.CaelusPendalarNekoUI:Build()
+	local sourceText, fetchProblem = self:Fetch(self.LibraryUrl)
+
+	if not sourceText then
+		return false,
+			"Pendalar UI download failed: " .. tostring(fetchProblem)
+	end
+
+	local recolorCount
+	sourceText, recolorCount = self:Recolor(sourceText)
+
+	if recolorCount == 0 then
+		warn(
+			"[Pendalar Hub] UI library colors changed; "
+				.. "continuing without pink recolor."
+		)
+	end
+
+	if type(loadstring) ~= "function" then
+		return false, "loadstring() is unavailable."
+	end
+
+	local chunk, compileProblem = loadstring(
+		sourceText,
+		"=PendalarEmbeddedUI"
+	)
+
+	if not chunk then
+		return false,
+			"Pendalar UI compile failed: " .. tostring(compileProblem)
+	end
+
+	local ok, library = pcall(chunk)
+
+	if not ok then
+		return false,
+			"Pendalar UI runtime failed: " .. tostring(library)
+	end
+
+	if type(library) ~= "table"
+		or type(library.New) ~= "function"
+	then
+		return false, "Pendalar UI library returned an invalid object."
+	end
+
+	local window = library:New("Pendalar Hub")
+	local nekosTab = window:NewTab("Nekos")
+	local creditsTab = window:NewTab("Credits")
+
+	for _, morphName in ipairs(environment.CaelusNekoAPI.Morphs) do
+		local buttonMorphName = morphName
+		local displayName = DISPLAY_NAMES[buttonMorphName]
+			or buttonMorphName
+
+		nekosTab:NewButton(
+			displayName,
+			"Morph into " .. displayName,
+			function()
+				local versionName =
+					state.selectedVersion
+					or state.activeVersion
+					or "V4"
+
+				local applied, problem =
+					environment.CaelusNekoAPI:Apply(
+						buttonMorphName,
+						versionName
+					)
+
+				if not applied then
+					warn(
+						"[Pendalar Hub] "
+							.. tostring(problem)
+					)
+				end
+			end
+		)
+	end
+
+	creditsTab:NewLabel("Alpha Sigma Male")
+	creditsTab:NewLabel("Larry")
+
+	window:SetMainTab(nekosTab)
+	window:SetFooter("Current Version : V1")
+
+	self.Window = window
+
+	if gui and gui.Parent then
+		gui.Enabled = false
+	end
+
+	return true
+end
+
+state.pendalarUiOk, state.pendalarUiProblem =
+	environment.CaelusPendalarNekoUI:Build()
+
+if not state.pendalarUiOk then
+	warn(
+		"[Pendalar Hub] Embedded UI failed: "
+			.. tostring(state.pendalarUiProblem)
+	)
+
+	if gui and gui.Parent then
+		gui.Enabled = true
+	end
+end
+
 local function overInteractiveGui(position)
 	local ok, objects = pcall(function()
 		return GuiService:GetGuiObjectsAtPosition(position.X, position.Y)
@@ -4162,6 +4373,11 @@ function state:Destroy()
 	if environment.CaelusNekoShadowSession == self then environment.CaelusNekoShadowSession = nil end
 	if environment.CaelusNekoAPI and environment.CaelusNekoAPI.Session == self then
 		environment.CaelusNekoAPI = nil
+	end
+	if environment.CaelusPendalarNekoUI
+		and environment.CaelusPendalarNekoUI.Session == self
+	then
+		environment.CaelusPendalarNekoUI = nil
 	end
 end
 
