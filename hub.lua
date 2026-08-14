@@ -4236,6 +4236,9 @@ if type(environment.PendalarNekoRequest) == "table" then
 	end
 end
 
+local PENDALAR_SCRIPTS = {
+}
+
 environment.CaelusPendalarNekoUI = {
 	Session = state,
 	Window = nil,
@@ -4244,9 +4247,13 @@ environment.CaelusPendalarNekoUI = {
 	EditorSkinColor = DEFAULT_WHITE_NEKO_SKIN,
 	EditorUse3DPants = true,
 	EditorPreviousName = nil,
+	FlingLoaded = false,
 	FlingEnabled = false,
-	FlingConnections = {},
-	Scripts = {},
+	FlingToggleButton = nil,
+	FlingGui = nil,
+	FlingSourceUrl =
+		"https://rawscripts.net/raw/Universal-Script-Touch-fling-script-22447",
+	Scripts = PENDALAR_SCRIPTS,
 	LibraryUrl =
 		"https://raw.githubusercontent.com/shidemuri/scripts/main/newuilib.lua",
 }
@@ -4347,98 +4354,298 @@ function environment.CaelusPendalarNekoUI:Recolor(sourceText)
 	return sourceText, total
 end
 
-function environment.CaelusPendalarNekoUI:DisconnectFling()
-	for _, connection in ipairs(self.FlingConnections) do
+function environment.CaelusPendalarNekoUI:GetGuiRoots()
+	local roots = {}
+	local seen = {}
+
+	local function add(root)
+		if root and not seen[root] then
+			seen[root] = true
+			table.insert(roots, root)
+		end
+	end
+
+	add(player:FindFirstChildOfClass("PlayerGui"))
+
+	pcall(function()
+		add(game:GetService("CoreGui"))
+	end)
+
+	if type(gethui) == "function" then
 		pcall(function()
-			connection:Disconnect()
+			add(gethui())
 		end)
 	end
 
-	table.clear(self.FlingConnections)
-	self.FlingEnabled = false
-
-	local character = player.Character
-	local root = character and character:FindFirstChild("HumanoidRootPart")
-
-	if root then
-		root.AssemblyAngularVelocity = Vector3.zero
-	end
+	return roots
 end
 
-function environment.CaelusPendalarNekoUI:SetTouchFling(enabled)
-	self:DisconnectFling()
+function environment.CaelusPendalarNekoUI:FindFlingGui(button)
+	local current = button
 
-	if not enabled then
+	while current do
+		if current:IsA("LayerCollector") then
+			return current
+		end
+
+		current = current.Parent
+	end
+
+	return nil
+end
+
+function environment.CaelusPendalarNekoUI:HideOriginalFlingGui()
+	local flingGui = self.FlingGui
+
+	if not flingGui or not flingGui.Parent then
 		return
 	end
 
-	self.FlingEnabled = true
-
-	local function bindCharacter(character)
-		local root = character:WaitForChild("HumanoidRootPart", 8)
-
-		if not root or not self.FlingEnabled then
-			return
+	pcall(function()
+		if flingGui:IsA("LayerCollector") then
+			flingGui.Enabled = false
+		elseif flingGui:IsA("GuiObject") then
+			flingGui.Visible = false
 		end
+	end)
+end
 
-		for _, part in ipairs(character:GetDescendants()) do
-			if part:IsA("BasePart") then
-				table.insert(
-					self.FlingConnections,
-					part.Touched:Connect(function(hit)
-						if not self.FlingEnabled
-							or not hit
-							or not hit.Parent
-						then
-							return
-						end
+function environment.CaelusPendalarNekoUI:FindOriginalFlingButton(
+	addedInstances
+)
+	local bestButton
+	local bestScore = -1
 
-						local otherHumanoid =
-							hit.Parent:FindFirstChildOfClass("Humanoid")
-							or (
-								hit.Parent.Parent
-								and hit.Parent.Parent:FindFirstChildOfClass(
-									"Humanoid"
-								)
-							)
+	for instance in pairs(addedInstances) do
+		if instance
+			and instance.Parent
+			and instance:IsA("TextButton")
+		then
+			local textValue = string.lower(
+				tostring(instance.Text or "")
+			)
+			local nameValue = string.lower(
+				tostring(instance.Name or "")
+			)
+			local combined = textValue .. " " .. nameValue
+			local score = 0
 
-						if not otherHumanoid
-							or otherHumanoid.Parent == character
-						then
-							return
-						end
+			if combined:find("fling", 1, true) then
+				score = score + 20
+			end
 
-						root.AssemblyAngularVelocity =
-							Vector3.new(0, 3500, 0)
+			if combined:find("touch", 1, true) then
+				score = score + 10
+			end
 
-						root.AssemblyLinearVelocity =
-							root.CFrame.LookVector * 85
-							+ Vector3.new(0, 18, 0)
+			if combined:find("on", 1, true)
+				or combined:find("off", 1, true)
+			then
+				score = score + 3
+			end
 
-						task.delay(0.12, function()
-							if root and root.Parent then
-								root.AssemblyAngularVelocity =
-									Vector3.zero
-							end
-						end)
-					end)
-				)
+			if score > bestScore then
+				bestScore = score
+				bestButton = instance
 			end
 		end
 	end
 
-	if player.Character then
-		task.spawn(bindCharacter, player.Character)
+	if bestScore <= 0 then
+		return nil
 	end
 
-	table.insert(
-		self.FlingConnections,
-		player.CharacterAdded:Connect(function(character)
-			if self.FlingEnabled then
-				task.spawn(bindCharacter, character)
-			end
-		end)
+	return bestButton
+end
+
+function environment.CaelusPendalarNekoUI:DetectOriginalFlingState()
+	local button = self.FlingToggleButton
+
+	if not button or not button.Parent then
+		return false
+	end
+
+	local textValue = string.lower(
+		tostring(button.Text or "")
 	)
+
+	if textValue:find("off", 1, true) then
+		return false
+	end
+
+	if textValue:find("on", 1, true) then
+		return true
+	end
+
+	return false
+end
+
+function environment.CaelusPendalarNekoUI:TriggerOriginalFlingButton()
+	local button = self.FlingToggleButton
+
+	if not button or not button.Parent then
+		return false,
+			"Original Touch Fling toggle button was not found."
+	end
+
+	if type(firesignal) == "function" then
+		local ok = pcall(function()
+			firesignal(button.MouseButton1Click)
+		end)
+
+		if ok then
+			return true
+		end
+	end
+
+	if type(getconnections) == "function" then
+		local ok, connections = pcall(
+			getconnections,
+			button.MouseButton1Click
+		)
+
+		if ok and type(connections) == "table" then
+			local fired = false
+
+			for _, connection in ipairs(connections) do
+				if type(connection.Fire) == "function" then
+					pcall(function()
+						connection:Fire()
+					end)
+					fired = true
+				elseif type(connection.Function) == "function" then
+					task.spawn(connection.Function)
+					fired = true
+				end
+			end
+
+			if fired then
+				return true
+			end
+		end
+	end
+
+	return false,
+		"Executor does not expose firesignal/getconnections."
+end
+
+function environment.CaelusPendalarNekoUI:SetOriginalTouchFling(
+	enabled
+)
+	if not self.FlingLoaded then
+		return false, "Original Touch Fling did not load."
+	end
+
+	enabled = enabled == true
+
+	if self.FlingEnabled == enabled then
+		return true
+	end
+
+	local triggered, problem =
+		self:TriggerOriginalFlingButton()
+
+	if not triggered then
+		return false, problem
+	end
+
+	self.FlingEnabled = enabled
+	self:HideOriginalFlingGui()
+
+	return true
+end
+
+function environment.CaelusPendalarNekoUI:LoadOriginalTouchFling()
+	if self.FlingLoaded then
+		return true
+	end
+
+	local roots = self:GetGuiRoots()
+	local addedInstances = {}
+	local captureConnections = {}
+
+	for _, root in ipairs(roots) do
+		for _, descendant in ipairs(root:GetDescendants()) do
+			addedInstances[descendant] = false
+		end
+
+		table.insert(
+			captureConnections,
+			root.DescendantAdded:Connect(function(instance)
+				addedInstances[instance] = true
+			end)
+		)
+	end
+
+	local sourceText, fetchProblem =
+		self:Fetch(self.FlingSourceUrl)
+
+	if not sourceText then
+		for _, connection in ipairs(captureConnections) do
+			connection:Disconnect()
+		end
+
+		return false,
+			"Touch Fling download failed: "
+				.. tostring(fetchProblem)
+	end
+
+	local chunk, compileProblem = loadstring(
+		sourceText,
+		"=PendalarOriginalTouchFlingLoader"
+	)
+
+	if not chunk then
+		for _, connection in ipairs(captureConnections) do
+			connection:Disconnect()
+		end
+
+		return false,
+			"Touch Fling compile failed: "
+				.. tostring(compileProblem)
+	end
+
+	local ok, runtimeProblem = pcall(chunk)
+
+	task.wait(0.75)
+
+	for _, connection in ipairs(captureConnections) do
+		connection:Disconnect()
+	end
+
+	if not ok then
+		return false,
+			"Touch Fling runtime failed: "
+				.. tostring(runtimeProblem)
+	end
+
+	local onlyAdded = {}
+
+	for instance, wasAdded in pairs(addedInstances) do
+		if wasAdded then
+			onlyAdded[instance] = true
+		end
+	end
+
+	self.FlingToggleButton =
+		self:FindOriginalFlingButton(onlyAdded)
+
+	if self.FlingToggleButton then
+		self.FlingGui =
+			self:FindFlingGui(self.FlingToggleButton)
+	end
+
+	self.FlingLoaded = true
+	self.FlingEnabled = self:DetectOriginalFlingState()
+	self:HideOriginalFlingGui()
+
+	if not self.FlingToggleButton then
+		return false,
+			"Touch Fling loaded, but its original toggle "
+				.. "button could not be located."
+	end
+
+	return true
 end
 
 function environment.CaelusPendalarNekoUI:RunScript(scriptEntry)
@@ -4477,51 +4684,6 @@ function environment.CaelusPendalarNekoUI:RunScript(scriptEntry)
 			)
 		end
 	end)
-
-	return true
-end
-
-function environment.CaelusPendalarNekoUI:AddScript(
-	name,
-	url,
-	description
-)
-	if type(name) ~= "string"
-		or name:gsub("%s+", "") == ""
-	then
-		return false, "Script name is required."
-	end
-
-	if type(url) ~= "string"
-		or not url:match("^https?://")
-	then
-		return false, "A valid http(s) URL is required."
-	end
-
-	local entry = {
-		Name = name,
-		Url = url,
-		Description = description or "Run " .. name,
-	}
-
-	table.insert(self.Scripts, entry)
-
-	if self.ScriptsTab then
-		self.ScriptsTab:NewButton(
-			entry.Name,
-			entry.Description,
-			function()
-				local ok, problem = self:RunScript(entry)
-
-				if not ok then
-					warn(
-						"[Pendalar Scripts] "
-							.. tostring(problem)
-					)
-				end
-			end
-		)
-	end
 
 	return true
 end
@@ -4778,6 +4940,15 @@ function environment.CaelusPendalarNekoUI:SaveEditor()
 end
 
 function environment.CaelusPendalarNekoUI:Build()
+	local flingOk, flingProblem = self:LoadOriginalTouchFling()
+
+	if not flingOk then
+		warn(
+			"[Pendalar Touch Fling] "
+				.. tostring(flingProblem)
+		)
+	end
+
 	local sourceText, fetchProblem = self:Fetch(self.LibraryUrl)
 
 	if not sourceText then
@@ -4879,11 +5050,19 @@ function environment.CaelusPendalarNekoUI:Build()
 
 	settingsTab:NewBoolButton(
 		"Touch Fling",
-		"Fling players when your character touches them",
+		"Toggle the hidden original Touch Fling script",
 		function(enabled)
-			self:SetTouchFling(enabled)
+			local changed, problem =
+				self:SetOriginalTouchFling(enabled)
+
+			if not changed then
+				warn(
+					"[Pendalar Touch Fling] "
+						.. tostring(problem)
+				)
+			end
 		end,
-		false
+		self.FlingEnabled
 	)
 
 	editorTab:NewLabel("Custom Neko Editor")
@@ -4972,54 +5151,10 @@ function environment.CaelusPendalarNekoUI:Build()
 
 	scriptsTab:NewLabel("Pendalar Scripts")
 
-	self.ScriptName = scriptsTab:NewTextBar(
-		"Script Name",
-		"Button name",
-		""
-	)
-
-	self.ScriptUrl = scriptsTab:NewTextBar(
-		"Script URL",
-		"Raw http(s) URL",
-		""
-	)
-
-	self.ScriptDescription = scriptsTab:NewTextBar(
-		"Description",
-		"Optional description",
-		""
-	)
-
-	self.ScriptStatus = scriptsTab:NewLabel(
-		"Add scripts by raw URL"
-	)
-
-	scriptsTab:NewButton(
-		"Add Script",
-		"Add this script to the current Pendalar session",
-		function()
-			local added, problem = self:AddScript(
-				self.ScriptName:GetText(),
-				self.ScriptUrl:GetText(),
-				self.ScriptDescription:GetText()
-			)
-
-			if added then
-				self.ScriptStatus.Text =
-					"Added : " .. self.ScriptName:GetText()
-				self.ScriptName.Text = ""
-				self.ScriptUrl.Text = ""
-				self.ScriptDescription.Text = ""
-			else
-				self.ScriptStatus.Text =
-					tostring(problem)
-			end
-		end
-	)
-
 	for _, scriptEntry in ipairs(self.Scripts) do
 		local entry = scriptEntry
-		local scriptName = entry.Name or entry[1] or "Script"
+		local scriptName =
+			entry.Name or entry[1] or "Script"
 		local description =
 			entry.Description
 			or entry[3]
@@ -5113,9 +5248,13 @@ end))
 function state:Destroy()
 	if self.destroyed then return end
 	self.destroyed = true
-	if environment.CaelusPendalarNekoUI then
-		environment.CaelusPendalarNekoUI:DisconnectFling()
+
+	if environment.CaelusPendalarNekoUI
+		and environment.CaelusPendalarNekoUI.FlingEnabled
+	then
+		environment.CaelusPendalarNekoUI:SetOriginalTouchFling(false)
 	end
+
 	cleanupShadow()
 	disconnectArray(self.connections)
 	if self.gui and self.gui.Parent then self.gui:Destroy() end
