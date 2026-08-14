@@ -301,6 +301,8 @@ environment.CaelusLegacyNekoConfig = {
 		"Cowboy Neko",
 		"Dino Neko",
 		"McDonalds Neko",
+		"Midnight Neko",
+		"Melanie Neko",
 		"Noob Neko",
 		"Pink Cow Girl",
 		"Snow Fox Neko",
@@ -312,6 +314,12 @@ environment.CaelusLegacyNekoConfig = {
 		["Cowboy Neko"] = {file = "CowboyNeko.rbxm", display = "Cowboy Neko"},
 		["Dino Neko"] = {file = "DinoNeko.rbxm", display = "Dino Neko"},
 		["McDonalds Neko"] = {file = "McDonaldsNeko.rbxm", display = "McDonald's Neko"},
+		["Midnight Neko"] = {file = "MidnightNeko.rbxm", display = "Midnight Neko"},
+		["Melanie Neko"] = {
+			file = "MelanieNeko.rbxm",
+			display = "Melanie Neko",
+			preserveEverything = true,
+		},
 		["Noob Neko"] = {file = "NoobNeko.rbxm", display = "Noob Neko", skinColor = Color3.fromRGB(245, 205, 48), accentColor = Color3.fromRGB(13, 105, 172)},
 		["Pink Cow Girl"] = {file = "PinkCowGirl.rbxm", display = "Pink Cow Girl"},
 		["Snow Fox Neko"] = {file = "SnowFoxNeko.rbxm", display = "Snow Fox Neko"},
@@ -2481,6 +2489,55 @@ function environment.CaelusLegacyNekoConfig:patchController(controller, name)
 		return false, problem
 	end
 
+	local config = self.variants[name]
+
+	if config and config.preserveEverything then
+		local ok, patchProblem = pcall(function()
+			for _, sourceChild in ipairs(root:GetChildren()) do
+				local oldChild = controller:FindFirstChild(sourceChild.Name)
+
+				if oldChild then
+					oldChild:Destroy()
+				end
+
+				sourceChild:Clone().Parent = controller
+			end
+
+			controller:SetAttribute("CaelusLegacyVariant", name)
+			controller:SetAttribute(
+				"CaelusPreserveLegacyEverything",
+				true
+			)
+
+			local bodyColors =
+				controller:FindFirstChildWhichIsA("BodyColors", true)
+				or root:FindFirstChildWhichIsA("BodyColors", true)
+
+			if bodyColors then
+				local colorOk, headColor = pcall(function()
+					return bodyColors.HeadColor3
+				end)
+
+				if colorOk and typeof(headColor) == "Color3" then
+					controller:SetAttribute(
+						"CaelusLegacySkinColor",
+						headColor
+					)
+				end
+			end
+		end)
+
+		pcall(function()
+			root:Destroy()
+		end)
+
+		if not ok then
+			return false, tostring(patchProblem)
+		end
+
+		return true, nil
+	end
+
 	local ok, patchProblem = pcall(function()
 		local sourceExtras = root:FindFirstChild("Extras")
 		local targetExtras = controller:FindFirstChild("Extras")
@@ -2990,6 +3047,15 @@ local function setArmorPartsVisible(parts, visible)
 				and (state.armorPartTransparency[part] or 0) or 1
 		end
 	end
+end
+
+local function activeLegacyPreservesEverything()
+	local config = state.activeLegacyNeko
+		and environment.CaelusLegacyNekoConfig.variants[
+			state.activeLegacyNeko
+		]
+
+	return config and config.preserveEverything == true
 end
 
 local function lowerBeltNames()
@@ -3529,6 +3595,25 @@ local function rebuildOriginalLowerBaseWear(shadow)
 end
 
 ensureOriginalLowerBaseWear = function(shadow, forceRebuild)
+	if activeLegacyPreservesEverything() then
+		clearLowerBaseWearTracking()
+
+		for _, child in ipairs(shadow:GetChildren()) do
+			if child.Name == "CaelusLowerBelt"
+				or child.Name == "CaelusLowerBaseWear"
+			then
+				child:Destroy()
+			end
+		end
+
+		shadow:SetAttribute(
+			"CaelusLowerBaseWearMode",
+			"PreservedByVariant"
+		)
+
+		return true
+	end
+
 	if not forceRebuild and lowerBaseWearIsHealthy(shadow) then return true end
 	return rebuildOriginalLowerBaseWear(shadow)
 end
@@ -3615,6 +3700,23 @@ local function rebuildOriginalUpperScarf(shadow)
 end
 
 ensureOriginalUpperScarf = function(shadow, forceRebuild)
+	if activeLegacyPreservesEverything() then
+		clearUpperScarfTracking()
+
+		for _, child in ipairs(shadow:GetChildren()) do
+			if child.Name == "CaelusUpperScarf" then
+				child:Destroy()
+			end
+		end
+
+		shadow:SetAttribute(
+			"CaelusUpperScarfMode",
+			"PreservedByVariant"
+		)
+
+		return true
+	end
+
 	if not forceRebuild and upperScarfIsHealthy(shadow) then return true end
 	return rebuildOriginalUpperScarf(shadow)
 end
@@ -4237,6 +4339,252 @@ if type(environment.PendalarNekoRequest) == "table" then
 end
 
 local PENDALAR_SCRIPTS = {
+	{
+		Name = "R6 Follow Animation",
+		Description = "Follow a selected player with an R6 animation",
+		Source = [=[
+local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
+local LocalPlayer = Players.LocalPlayer
+
+local guiParent = game:GetService("CoreGui")
+
+if type(gethui) == "function" then
+	pcall(function()
+		guiParent = gethui()
+	end)
+end
+
+local oldGui = guiParent:FindFirstChild("R6FollowGUI")
+
+if oldGui then
+	oldGui:Destroy()
+end
+
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "R6FollowGUI"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.Parent = guiParent
+
+local MainFrame = Instance.new("Frame")
+MainFrame.Parent = ScreenGui
+MainFrame.Size = UDim2.new(0, 300, 0, 150)
+MainFrame.Position = UDim2.new(0.5, -150, 0.5, -75)
+MainFrame.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+MainFrame.BorderSizePixel = 0
+MainFrame.Active = true
+MainFrame.Draggable = true
+
+local UICorner = Instance.new("UICorner")
+UICorner.Parent = MainFrame
+UICorner.CornerRadius = UDim.new(0, 20)
+
+local TitleBar = Instance.new("Frame")
+TitleBar.Parent = MainFrame
+TitleBar.Size = UDim2.new(1, 0, 0, 25)
+TitleBar.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+TitleBar.BorderSizePixel = 0
+
+local TitleLabel = Instance.new("TextLabel")
+TitleLabel.Parent = TitleBar
+TitleLabel.Size = UDim2.new(0, 120, 1, 0)
+TitleLabel.Position = UDim2.new(0, 5, 0, 0)
+TitleLabel.Text = "R6 Follow"
+TitleLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+TitleLabel.BackgroundTransparency = 1
+TitleLabel.TextSize = 14
+
+local CloseButton = Instance.new("TextButton")
+CloseButton.Parent = TitleBar
+CloseButton.Size = UDim2.new(0, 25, 1, 0)
+CloseButton.Position = UDim2.new(1, -25, 0, 0)
+CloseButton.Text = "X"
+CloseButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+CloseButton.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+CloseButton.BorderSizePixel = 0
+
+local MinimizeButton = Instance.new("TextButton")
+MinimizeButton.Parent = TitleBar
+MinimizeButton.Size = UDim2.new(0, 50, 1, 0)
+MinimizeButton.Position = UDim2.new(1, -75, 0, 0)
+MinimizeButton.Text = "Hide"
+MinimizeButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+MinimizeButton.BackgroundColor3 = Color3.fromRGB(100, 100, 100)
+MinimizeButton.BorderSizePixel = 0
+
+local TargetTextBox = Instance.new("TextBox")
+TargetTextBox.Parent = MainFrame
+TargetTextBox.Size = UDim2.new(0.9, 0, 0, 30)
+TargetTextBox.Position = UDim2.new(0.05, 0, 0.3, 0)
+TargetTextBox.PlaceholderText = "Enter target name"
+TargetTextBox.Text = ""
+TargetTextBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+TargetTextBox.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+TargetTextBox.BorderSizePixel = 0
+
+local ToggleButton = Instance.new("TextButton")
+ToggleButton.Parent = MainFrame
+ToggleButton.Size = UDim2.new(0.9, 0, 0, 30)
+ToggleButton.Position = UDim2.new(0.05, 0, 0.6, 0)
+ToggleButton.Text = "Start"
+ToggleButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+ToggleButton.BackgroundColor3 = Color3.fromRGB(70, 130, 180)
+ToggleButton.BorderSizePixel = 0
+
+local following = false
+local targetPlayer
+local animationId = "189854234"
+local activeAnimation
+
+local function stopFollowing()
+	following = false
+	ToggleButton.Text = "Start"
+
+	if activeAnimation then
+		activeAnimation:Stop()
+		activeAnimation = nil
+	end
+end
+
+CloseButton.MouseButton1Click:Connect(function()
+	stopFollowing()
+	ScreenGui:Destroy()
+end)
+
+local minimized = false
+
+MinimizeButton.MouseButton1Click:Connect(function()
+	if minimized then
+		MainFrame.Size = UDim2.new(0, 300, 0, 150)
+		MinimizeButton.Text = "Hide"
+	else
+		MainFrame.Size = UDim2.new(0, 300, 0, 25)
+		MinimizeButton.Text = "Show"
+	end
+
+	minimized = not minimized
+end)
+
+local function findTarget(targetName)
+	targetName = string.lower(targetName)
+
+	for _, candidate in ipairs(Players:GetPlayers()) do
+		if candidate ~= LocalPlayer then
+			local username = string.lower(candidate.Name)
+			local displayName = string.lower(candidate.DisplayName)
+
+			if string.find(username, targetName, 1, true)
+				or string.find(displayName, targetName, 1, true)
+			then
+				return candidate
+			end
+		end
+	end
+
+	return nil
+end
+
+local function playAnimation()
+	local character = LocalPlayer.Character
+	local humanoid =
+		character and character:FindFirstChildOfClass("Humanoid")
+
+	if not humanoid then
+		return
+	end
+
+	local animation = Instance.new("Animation")
+	animation.AnimationId = "rbxassetid://" .. animationId
+
+	activeAnimation = humanoid:LoadAnimation(animation)
+	activeAnimation:Play()
+end
+
+local function runFollowLoop()
+	while following do
+		local localCharacter = LocalPlayer.Character
+		local localRoot =
+			localCharacter
+			and localCharacter:FindFirstChild("HumanoidRootPart")
+
+		local targetCharacter =
+			targetPlayer and targetPlayer.Character
+
+		local targetRoot =
+			targetCharacter
+			and targetCharacter:FindFirstChild("HumanoidRootPart")
+
+		if not localRoot or not targetRoot then
+			stopFollowing()
+			break
+		end
+
+		local forwardCFrame =
+			targetRoot.CFrame * CFrame.new(0, 0, -2.5)
+
+		local backwardCFrame =
+			targetRoot.CFrame * CFrame.new(0, 0, -1.3)
+
+		local tweenForward = TweenService:Create(
+			localRoot,
+			TweenInfo.new(
+				0.15,
+				Enum.EasingStyle.Linear,
+				Enum.EasingDirection.Out
+			),
+			{CFrame = forwardCFrame}
+		)
+
+		tweenForward:Play()
+		tweenForward.Completed:Wait()
+
+		if not following then
+			break
+		end
+
+		local tweenBackward = TweenService:Create(
+			localRoot,
+			TweenInfo.new(
+				0.15,
+				Enum.EasingStyle.Linear,
+				Enum.EasingDirection.Out
+			),
+			{CFrame = backwardCFrame}
+		)
+
+		tweenBackward:Play()
+		tweenBackward.Completed:Wait()
+	end
+end
+
+ToggleButton.MouseButton1Click:Connect(function()
+	if following then
+		stopFollowing()
+		return
+	end
+
+	local targetName = TargetTextBox.Text
+
+	if targetName == "" then
+		warn("[R6 Follow] Enter a target name.")
+		return
+	end
+
+	targetPlayer = findTarget(targetName)
+
+	if not targetPlayer or not targetPlayer.Character then
+		warn("[R6 Follow] Target not found.")
+		return
+	end
+
+	following = true
+	ToggleButton.Text = "Stop"
+
+	playAnimation()
+	task.spawn(runFollowLoop)
+end)
+]=],
+	},
 }
 
 environment.CaelusPendalarNekoUI = {
@@ -4649,16 +4997,21 @@ function environment.CaelusPendalarNekoUI:LoadOriginalTouchFling()
 end
 
 function environment.CaelusPendalarNekoUI:RunScript(scriptEntry)
-	local url = scriptEntry.Url or scriptEntry[2]
+	local sourceText = scriptEntry.Source or scriptEntry.source
 
-	if type(url) ~= "string" or url == "" then
-		return false, "Script URL is missing."
-	end
+	if type(sourceText) ~= "string" or sourceText == "" then
+		local url = scriptEntry.Url or scriptEntry[2]
 
-	local sourceText, fetchProblem = self:Fetch(url)
+		if type(url) ~= "string" or url == "" then
+			return false, "Script Source/URL is missing."
+		end
 
-	if not sourceText then
-		return false, fetchProblem
+		local fetchProblem
+		sourceText, fetchProblem = self:Fetch(url)
+
+		if not sourceText then
+			return false, fetchProblem
+		end
 	end
 
 	if type(loadstring) ~= "function" then
@@ -4667,7 +5020,7 @@ function environment.CaelusPendalarNekoUI:RunScript(scriptEntry)
 
 	local chunk, compileProblem = loadstring(
 		sourceText,
-		"=PendalarUserScript"
+		"=PendalarScript"
 	)
 
 	if not chunk then
@@ -5065,6 +5418,33 @@ function environment.CaelusPendalarNekoUI:Build()
 		self.FlingEnabled
 	)
 
+	settingsTab:NewButton(
+		"R6 Follow Animation",
+		"Open the built-in R6 follow animation tool",
+		function()
+			local entry = self.Scripts[1]
+
+			if not entry
+				or entry.Name ~= "R6 Follow Animation"
+			then
+				warn(
+					"[Pendalar Hub] R6 Follow script entry "
+						.. "was not found."
+				)
+				return
+			end
+
+			local ran, problem = self:RunScript(entry)
+
+			if not ran then
+				warn(
+					"[Pendalar Hub] "
+						.. tostring(problem)
+				)
+			end
+		end
+	)
+
 	editorTab:NewLabel("Custom Neko Editor")
 
 	self.EditorName = editorTab:NewTextBar(
@@ -5178,6 +5558,7 @@ function environment.CaelusPendalarNekoUI:Build()
 
 	creditsTab:NewLabel("Alpha Sigma Male")
 	creditsTab:NewLabel("Larry")
+	creditsTab:NewLabel("melanie070910")
 
 	window:SetMainTab(nekosTab)
 	window:SetFooter("Current Version : V1")
