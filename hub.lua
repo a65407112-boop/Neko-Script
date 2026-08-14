@@ -1,6 +1,6 @@
 -- File: LOAD_NEKO_SHADOW_CUSTOM_3_27_PERSISTENT_PRESETS.lua
--- Caelus Neko Hub Runtime 3.27 Persistent Custom Neko Presets
--- 3.26 baseline + executor-workspace preset persistence and saved-Neko list fixes.
+-- Caelus Neko Hub Runtime 3.30 Melanie Client Bridge
+-- 3.29 remote-cache baseline + isolated client Direct Wear for Melanie.
 
 if not game:IsLoaded() then
 	game.Loaded:Wait()
@@ -14,7 +14,7 @@ local Debris = game:GetService("Debris")
 local HttpService = game:GetService("HttpService")
 
 local environment = (type(getgenv) == "function" and getgenv()) or _G
-local RUNTIME_VERSION = "3.29-remotecache"
+local RUNTIME_VERSION = "3.30-melanie-client-bridge"
 
 local function startupLog(message)
 	pcall(function()
@@ -72,7 +72,7 @@ do
 	label.Font = Enum.Font.GothamSemibold
 	label.TextColor3 = Color3.fromRGB(245, 245, 245)
 	label.TextSize = 13
-	label.Text = "Caelus Neko 3.26: starting..."
+	label.Text = "Caelus Neko 3.30: starting..."
 	label.Parent = bootGui
 
 	local corner = Instance.new("UICorner")
@@ -95,7 +95,7 @@ environment.CaelusNekoBootStatus = function(message, failed)
 	startupLog(message)
 end
 
-environment.CaelusNekoBootStatus("Caelus Neko 3.26: player ready")
+environment.CaelusNekoBootStatus("Caelus Neko 3.30: player ready")
 local ARMOR_OFF_TEMPLATE = "rbxassetid://0"
 local LOWER_BELT_NAMES = {"BeltBase", "BeltLayer", "BeltBack", "BeltCover"}
 local LOWER_REAR_ACCESSORY_NAMES = {"RearAccessoryRight", "RearAccessoryLeft"}
@@ -193,7 +193,7 @@ local function getObjectsWithRetry(uri, attempts)
 	return nil, lastProblem
 end
 
-environment.CaelusNekoBootStatus("Caelus Neko 3.29: loading assets...")
+environment.CaelusNekoBootStatus("Caelus Neko 3.30: loading assets...")
 
 local catalog = nil
 local catalogUri = nil
@@ -247,7 +247,7 @@ if not catalog then
 	)
 end
 
-environment.CaelusNekoBootStatus("Caelus Neko 3.29: assets ready")
+environment.CaelusNekoBootStatus("Caelus Neko 3.30: assets ready")
 startupLog("Asset catalog ready: " .. tostring(catalogUri))
 
 local menuTemplate = catalog:FindFirstChild("CaelusNekoOriginalMenu")
@@ -322,6 +322,7 @@ environment.CaelusLegacyNekoConfig = {
 			display = "Melanie Neko",
 			customController = true,
 			preserveEverything = true,
+			keys = {"F", "R", "Z", "X", "C", "V", "Y", "T", "P", "0", "M", "N"},
 		},
 		["Noob Neko"] = {file = "NoobNeko.rbxm", display = "Noob Neko", skinColor = Color3.fromRGB(245, 205, 48), accentColor = Color3.fromRGB(13, 105, 172)},
 		["Pink Cow Girl"] = {file = "PinkCowGirl.rbxm", display = "Pink Cow Girl"},
@@ -367,7 +368,7 @@ end
 
 local gui = menuTemplate
 gui.Parent = playerGui
-environment.CaelusNekoBootStatus("Caelus Neko 3.29: building menu...")
+environment.CaelusNekoBootStatus("Caelus Neko 3.30: building menu...")
 local main = gui:FindFirstChild("Frame")
 local selectionTabs = main and main:FindFirstChild("selection tabs")
 local morphList = selectionTabs and selectionTabs:FindFirstChild("ScrollingFrame")
@@ -2289,9 +2290,13 @@ end
 
 local function rebuildKeyPanel(versionName)
 	clearKeyButtons()
-	local keys = KEYS_BY_VERSION[versionName] or {}
+	local legacyConfig = state.activeLegacyNeko
+		and environment.CaelusLegacyNekoConfig.variants[state.activeLegacyNeko]
+	local keys = (legacyConfig and legacyConfig.keys)
+		or KEYS_BY_VERSION[versionName]
+		or {}
 	for index, key in ipairs(keys) do createKeyButton(key, index) end
-	keyTitle.Text = versionName .. "  Keys"
+	keyTitle.Text = (state.activeLegacyNeko or versionName) .. "  Keys"
 	keyPanel.Visible = state.keyPanelOpen and state.command ~= nil and #keys > 0
 end
 
@@ -2346,6 +2351,281 @@ local function cleanupShadow()
 	keyPanel.Visible = false
 end
 
+environment.CaelusMelanieSourceAdapter = function(source)
+	local function replacePlainOnce(text, needle, replacement)
+		local first, last = text:find(needle, 1, true)
+		if not first then
+			return nil, "missing source marker: " .. tostring(needle)
+		end
+		return text:sub(1, first - 1) .. replacement .. text:sub(last + 1), nil
+	end
+
+	local function replacePlainAll(text, needle, replacement)
+		local cursor = 1
+		local pieces = {}
+		local replaced = 0
+		while true do
+			local first, last = text:find(needle, cursor, true)
+			if not first then
+				table.insert(pieces, text:sub(cursor))
+				break
+			end
+			table.insert(pieces, text:sub(cursor, first - 1))
+			table.insert(pieces, replacement)
+			cursor = last + 1
+			replaced = replaced + 1
+		end
+		return table.concat(pieces), replaced
+	end
+
+	local function spliceBetween(text, firstMarker, lastMarker, replacement)
+		local first = text:find(firstMarker, 1, true)
+		if not first then
+			return nil, "missing source marker: " .. tostring(firstMarker)
+		end
+		local last = text:find(lastMarker, first, true)
+		if not last then
+			return nil, "missing source marker: " .. tostring(lastMarker)
+		end
+		return text:sub(1, first - 1) .. replacement .. text:sub(last), nil
+	end
+
+	local problem
+
+	-- The supplied anims3 is a legacy server Script.  Keep its original
+	-- animation/effect code, but replace only the server input transport and
+	-- player-character lookup so it can drive the isolated Direct Wear rig.
+	source, problem = spliceBetween(
+		source,
+		"local Player = game.Players:GetPlayerFromCharacter(script.Parent)",
+		"--replace all player into = Player = game.Players:GetPlayerFromCharacter(script.Parent)",
+		[=[local Player = game:GetService("Players").LocalPlayer
+if not Player then
+	error("Melanie client bridge could not resolve LocalPlayer")
+end
+local Mouse = Player:GetMouse()
+local mouse = Mouse
+local UserInputService = game:GetService("UserInputService")
+local ContextActionService = game:GetService("ContextActionService")
+
+]=]
+	)
+	if not source then return nil, problem end
+
+	source, problem = spliceBetween(
+		source,
+		"local Player = nil",
+		"ZTfade=false",
+		[=[local DriverCharacter = script.Parent
+local RealCharacter = Player.Character
+local MotionHumanoid = RealCharacter and RealCharacter:FindFirstChildOfClass("Humanoid")
+local MotionRootPart = RealCharacter and RealCharacter:FindFirstChild("HumanoidRootPart")
+if not (DriverCharacter and MotionHumanoid and MotionRootPart) then
+	error("Melanie Direct Wear character bridge is incomplete")
+end
+
+]=]
+	)
+	if not source then return nil, problem end
+
+	source, problem = replacePlainOnce(
+		source,
+		"Character= Player.Character",
+		"Character = DriverCharacter"
+	)
+	if not source then return nil, problem end
+
+	local createStart = "local RbxUtility = require("
+	local createEnd = "local Create = RbxUtility.Create"
+	source, problem = spliceBetween(
+		source,
+		createStart,
+		createEnd,
+		[=[local CaelusPropertyAliases = {
+	Pitch = "PlaybackSpeed",
+	maxForce = "MaxForce",
+	velocity = "Velocity",
+	angularvelocity = "AngularVelocity",
+	cframe = "CFrame",
+	position = "Position",
+}
+local function Create(className)
+	return function(properties)
+		local object = Instance.new(className)
+		local parent = nil
+		for key, value in pairs(properties or {}) do
+			if key == "Parent" then
+				parent = value
+			elseif type(key) == "number" and typeof(value) == "Instance" then
+				value.Parent = object
+			else
+				local propertyName = CaelusPropertyAliases[key] or key
+				local assigned = pcall(function()
+					object[propertyName] = value
+				end)
+				if not assigned and propertyName ~= key then
+					pcall(function() object[key] = value end)
+				end
+			end
+		end
+		if parent then object.Parent = parent end
+		return object
+	end
+end
+local RbxUtility = {Create = Create}
+]=]
+	)
+	if not source then return nil, problem end
+	source, problem = replacePlainOnce(source, createEnd, "local Create = RbxUtility.Create")
+	if not source then return nil, problem end
+
+	source = replacePlainAll(
+		source,
+		"Humanoid.MoveDirection",
+		"MotionHumanoid.MoveDirection"
+	)
+	source = replacePlainAll(
+		source,
+		"Humanoid.Sit",
+		"MotionHumanoid.Sit"
+	)
+	source = replacePlainAll(
+		source,
+		"RootPart.Velocity",
+		"MotionRootPart.AssemblyLinearVelocity"
+	)
+
+	source, problem = replacePlainOnce(
+		source,
+		'game:GetService("RunService").Heartbeat:connect(function(s, p)',
+		[=[local CaelusHeartbeatConnection
+CaelusHeartbeatConnection = game:GetService("RunService").Heartbeat:Connect(function(s, p)
+	if script:GetAttribute("CaelusSessionActive") ~= true or not script.Parent then
+		pcall(function() script.ArtificialHB:Fire() end)
+		CaelusHeartbeatConnection:Disconnect()
+		return
+	end]=]
+	)
+	if not source then return nil, problem end
+
+	source, problem = replacePlainOnce(
+		source,
+		"while Humanoid.Health>0.001 do ",
+		'while script:GetAttribute("CaelusSessionActive") == true and Humanoid.Health > 0.001 do '
+	)
+	if not source then return nil, problem end
+	source = replacePlainAll(
+		source,
+		"while Hold == true do",
+		'while Hold == true and script:GetAttribute("CaelusSessionActive") == true do'
+	)
+	source = replacePlainAll(
+		source,
+		"while laying == true do",
+		'while laying == true and script:GetAttribute("CaelusSessionActive") == true do'
+	)
+	source = replacePlainAll(
+		source,
+		"while true do Swait()",
+		'while script:GetAttribute("CaelusSessionActive") == true do Swait()'
+	)
+	source = replacePlainAll(
+		source,
+		'while ReturningValue == "" do wait() end',
+		'while ReturningValue == "" and script:GetAttribute("CaelusSessionActive") == true do wait() end'
+	)
+
+	local bridgeMarker = "coroutine.resume(coroutine.create(function()"
+	local bridgeStart = nil
+	local cursor = 1
+	while true do
+		local found = source:find(bridgeMarker, cursor, true)
+		if not found then break end
+		bridgeStart = found
+		cursor = found + #bridgeMarker
+	end
+	if not bridgeStart
+		or not source:find("RemoteFunction", bridgeStart, true)
+	then
+		return nil, "missing Melanie server remote bridge"
+	end
+
+	source = source:sub(1, bridgeStart - 1) .. [=[
+local CaelusCommand = Character:FindFirstChild("CaelusNekoCommand")
+if not (CaelusCommand and CaelusCommand:IsA("BindableEvent")) then
+	CaelusCommand = Instance.new("BindableEvent")
+	CaelusCommand.Name = "CaelusNekoCommand"
+	CaelusCommand.Parent = Character
+end
+
+local function CaelusActive()
+	return script.Parent ~= nil
+		and script:GetAttribute("CaelusSessionActive") == true
+end
+
+local function CaelusKeyDown(key)
+	if not CaelusActive() or type(key) ~= "string" then return end
+	task.spawn(function()
+		local ok, message = pcall(KeyDownF, string.lower(key))
+		if not ok and script.Parent then
+			script:SetAttribute("CaelusCommandError", tostring(message))
+		end
+	end)
+end
+
+local function CaelusKeyUp(key)
+	if not CaelusActive() or type(key) ~= "string" then return end
+	task.spawn(function()
+		local ok, message = pcall(KeyUpF, string.lower(key))
+		if not ok and script.Parent then
+			script:SetAttribute("CaelusCommandError", tostring(message))
+		end
+	end)
+end
+
+local function CaelusMouseDown()
+	if not CaelusActive() then return end
+	task.spawn(function()
+		local ok, message = pcall(Button1DownF)
+		if not ok and script.Parent then
+			script:SetAttribute("CaelusCommandError", tostring(message))
+		end
+	end)
+end
+
+local function CaelusMouseUp()
+	if not CaelusActive() then return end
+	local ok, message = pcall(Button1UpF)
+	if not ok and script.Parent then
+		script:SetAttribute("CaelusCommandError", tostring(message))
+	end
+end
+
+Mouse.Move:Connect(function()
+	if CaelusActive() then Target = Mouse.Hit.Position end
+end)
+Mouse.Button1Down:Connect(CaelusMouseDown)
+Mouse.Button1Up:Connect(CaelusMouseUp)
+Mouse.KeyDown:Connect(CaelusKeyDown)
+Mouse.KeyUp:Connect(CaelusKeyUp)
+CaelusCommand.Event:Connect(function(kind, value)
+	if kind == "key_down" then
+		CaelusKeyDown(value)
+	elseif kind == "key_up" then
+		CaelusKeyUp(value)
+	elseif kind == "mouse_down" then
+		CaelusMouseDown()
+	elseif kind == "mouse_up" then
+		CaelusMouseUp()
+	end
+end)
+
+script:SetAttribute("CaelusReady", true)
+]=]
+
+	return source, nil
+end
+
 local function isolatedChunk(targetScript)
 	local source = nil
 	local lastProblem = "empty source"
@@ -2374,6 +2654,13 @@ local function isolatedChunk(targetScript)
 			'if h ~= nil and hit%.Parent ~= Character and hit%.Parent:FindFirstChild%("Torso"%) or hit%.Parent:FindFirstChild%("UpperTorso"%) ~= nil then',
 			'if h ~= nil and hit.Parent ~= Character and hit.Parent ~= DriverCharacter and (hit.Parent:FindFirstChild("Torso") or hit.Parent:FindFirstChild("UpperTorso")) then'
 		)
+	end
+
+	if targetScript:GetAttribute("CaelusMelanieClientController") == true then
+		source, lastProblem = environment.CaelusMelanieSourceAdapter(source)
+		if not source then
+			return nil, "Melanie client adapter failed: " .. tostring(lastProblem)
+		end
 	end
 
 	local chunk, problem = compiler("local script = ...\n" .. source)
@@ -2478,141 +2765,99 @@ function environment.CaelusLegacyNekoConfig:loadRoot(name)
 			.. tostring(lastProblem)
 end
 
-function environment.CaelusLegacyNekoConfig:runCustomController(
-	name,
-	shadow
-)
+function environment.CaelusLegacyNekoConfig:createCustomShadow(name, realRoot)
 	local root, problem = self:loadRoot(name)
-
-	if not root then
-		return nil, problem
-	end
+	if not root then return nil, nil, nil, problem end
 
 	local mainModule =
 		root:IsA("ModuleScript")
 			and root
-		or root:FindFirstChild("MainModule", true)
+			or root:FindFirstChild("MainModule", true)
+	local template = mainModule
+		and mainModule:FindFirstChild("DefaultCharacter6")
+	local sourceController = mainModule
+		and mainModule:FindFirstChild("anims3")
 
-	if mainModule and mainModule:IsA("ModuleScript") then
-		local ok, moduleOrProblem = pcall(require, mainModule)
-
-		if ok and type(moduleOrProblem) == "table"
-			and type(moduleOrProblem.advneko) == "function"
-		then
-			-- Melanie's original MainModule resolves the player with
-			-- Players:WaitForChild(Plr), so its API expects the player's name
-			-- rather than the Player instance used by the rest of this hub.
-			local started, startProblem = pcall(
-				moduleOrProblem.advneko,
-				player.Name
-			)
-
-			if started then
-				root.Name = "CaelusMelanieRuntime"
-
-				local runtimeParent =
-					game:GetService("ReplicatedStorage")
-
-				root.Parent = runtimeParent
-				state.externalCustomRuntime = root
-
-				shadow:SetAttribute(
-					"CaelusCustomControllerMode",
-					"MainModule.advneko"
-				)
-				shadow:SetAttribute(
-					"CaelusCustomControllerStartedNatively",
-					true
-				)
-
-				return root, nil
-			end
-
-			problem =
-				"MainModule.advneko failed: "
-				.. tostring(startProblem)
-		elseif not ok then
-			problem =
-				"MainModule require failed: "
-				.. tostring(moduleOrProblem)
-		else
-			problem =
-				"MainModule does not expose advneko(Plr)."
-		end
+	if not (mainModule and mainModule:IsA("ModuleScript")) then
+		root:Destroy()
+		return nil, nil, nil, "Melanie MainModule is missing."
+	end
+	if not (template and template:IsA("Model")) then
+		root:Destroy()
+		return nil, nil, nil, "Melanie DefaultCharacter6 is missing."
+	end
+	if not (
+		sourceController
+		and (
+			sourceController:IsA("Script")
+			or sourceController:IsA("LocalScript")
+			or sourceController:IsA("ModuleScript")
+		)
+	) then
+		root:Destroy()
+		return nil, nil, nil, "Melanie anims3 controller is missing."
 	end
 
-	local function controllerScore(candidate)
-		if not candidate:IsA("LocalScript") then
-			return -1
-		end
+	local shadow = template:Clone()
+	shadow.Name = "CaelusNekoVisual_" .. player.UserId
+	shadow:SetAttribute("CaelusNekoVisualRig", true)
+	shadow:SetAttribute("CaelusLowerArmorOn", true)
+	shadow:SetAttribute("CaelusUpperArmorOn", true)
+	shadow:SetAttribute("CaelusCustomControllerMode", "MelanieClientDirectWear")
 
-		local score = 0
-		local lowered = string.lower(candidate.Name)
-
-		if lowered == "main" then
-			score = score + 100
-		end
-
-		if lowered:find("neko", 1, true) then
-			score = score + 60
-		end
-
-		if lowered:find("controller", 1, true) then
-			score = score + 50
-		end
-
-		if candidate.Parent == root then
-			score = score + 30
-		end
-
-		score = score + math.min(#candidate:GetChildren(), 20)
-
-		return score
+	local visualRoot = shadow:FindFirstChild("HumanoidRootPart")
+	local visualHumanoid =
+		shadow:FindFirstChild("NekoHumanoid")
+			or shadow:FindFirstChildOfClass("Humanoid")
+	if not (visualRoot and visualRoot:IsA("BasePart") and visualHumanoid) then
+		shadow:Destroy()
+		root:Destroy()
+		return nil, nil, nil, "Melanie R6 template is incomplete."
 	end
 
-	local controller
-	local bestScore = -1
-
-	if root:IsA("LocalScript") then
-		controller = root
-	else
-		for _, descendant in ipairs(root:GetDescendants()) do
-			local score = controllerScore(descendant)
-
-			if score > bestScore then
-				bestScore = score
-				controller = descendant
-			end
-		end
-	end
-
-	if not controller then
-		pcall(function()
+	for _, bodyName in ipairs(DIRECT_BODY_NAMES) do
+		local bodyPart = shadow:FindFirstChild(bodyName)
+		if not (bodyPart and bodyPart:IsA("BasePart")) then
+			shadow:Destroy()
 			root:Destroy()
-		end)
-
-		return nil,
-			tostring(problem or "No runnable custom controller found.")
+			return nil, nil, nil, "Melanie R6 part is missing: " .. bodyName
+		end
 	end
 
-	if root == controller then
-		controller.Name = "CaelusNekoOriginalController"
-		controller.Parent = shadow
-	else
-		root.Name = "CaelusCustomNekoRoot"
-		root.Parent = shadow
-	end
+	local animate = shadow:FindFirstChild("Animate")
+	if animate and animate:IsA("LocalScript") then animate.Disabled = true end
+	local healthScript = shadow:FindFirstChild("Health")
+	if healthScript and healthScript:IsA("Script") then healthScript.Disabled = true end
+	pcall(function() visualHumanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None end)
+	pcall(function() visualHumanoid.BreakJointsOnDeath = false end)
+	pcall(function() visualHumanoid.RequiresNeck = false end)
+	pcall(function() visualHumanoid.AutoRotate = false end)
+	pcall(function() visualHumanoid.PlatformStand = true end)
+	pcall(function() visualHumanoid.EvaluateStateMachine = false end)
 
+	visualRoot.Anchored = true
+	moveWholeRigToRoot(shadow, visualRoot, realRoot.CFrame)
+	shadow.Parent = workspace
+	moveWholeRigToRoot(shadow, visualRoot, realRoot.CFrame)
+
+	local command = Instance.new("BindableEvent")
+	command.Name = "CaelusNekoCommand"
+	command.Parent = shadow
+	local armorEvent = Instance.new("BindableEvent")
+	armorEvent.Name = "CaelusArmorToggle"
+	armorEvent.Parent = shadow
+
+	local controller = sourceController:Clone()
+	controller.Name = "CaelusMelanieClientController"
 	controller:SetAttribute("CaelusSessionActive", true)
 	controller:SetAttribute("CaelusStartError", nil)
 	controller:SetAttribute("CaelusCustomController", true)
+	controller:SetAttribute("CaelusMelanieClientController", true)
+	controller.Parent = shadow
 
-	shadow:SetAttribute(
-		"CaelusCustomControllerMode",
-		"LocalScriptFallback"
-	)
-
-	return controller, problem
+	trackVisualModel(shadow, true)
+	root:Destroy()
+	return shadow, visualRoot, controller, nil
 end
 
 function environment.CaelusLegacyNekoConfig:replaceChild(targetParent, sourceParent, childName)
@@ -4002,10 +4247,25 @@ local function applyMorph(versionName, morphName)
 		return
 	end
 
-	local shadow, visualRoot, shadowError = makeShadow(realRoot)
+	local shadow
+	local visualRoot
+	local controller
+	local shadowError
+	if legacyConfig and legacyConfig.customController then
+		shadow, visualRoot, controller, shadowError =
+			environment.CaelusLegacyNekoConfig:createCustomShadow(
+				morphName,
+				realRoot
+			)
+	else
+		shadow, visualRoot, shadowError = makeShadow(realRoot)
+	end
 	if not shadow then
+		selectedText.Text =
+			"Custom model failed: " .. tostring(shadowError or "unknown")
+		startupLog(selectedText.Text)
 		applying = false
-		fail(shadowError)
+		return
 	end
 	state.shadow = shadow
 	state.command = shadow:FindFirstChild("CaelusNekoCommand")
@@ -4030,26 +4290,7 @@ local function applyMorph(versionName, morphName)
 	end
 	startFollowing(shadow, visualRoot, realRoot, serial)
 
-	local controller
-
-	if legacyConfig and legacyConfig.customController then
-		local customProblem
-
-		controller, customProblem =
-			environment.CaelusLegacyNekoConfig:runCustomController(
-				morphName,
-				shadow
-			)
-
-		if not controller then
-			selectedText.Text =
-				"Custom controller failed: " .. tostring(customProblem)
-			startupLog(selectedText.Text)
-			cleanupShadow()
-			applying = false
-			return
-		end
-	else
+	if not (legacyConfig and legacyConfig.customController) then
 		controller = template:Clone()
 		controller.Name = "CaelusNekoOriginalController"
 		controller:SetAttribute("CaelusSessionActive", true)
@@ -4116,101 +4357,67 @@ local function applyMorph(versionName, morphName)
 		end
 	end
 
-	local nativeCustomStarted =
-		legacyConfig
-		and legacyConfig.customController
-		and shadow:GetAttribute(
-			"CaelusCustomControllerStartedNatively"
-		) == true
-
-	if not nativeCustomStarted then
-		local started, startProblem =
-			runEmbedded(controller, true)
-
-		if not started then
-			selectedText.Text =
-				"Controller compile failed: "
+	local started, startProblem = runEmbedded(controller, true)
+	if not started then
+		selectedText.Text =
+			"Controller compile failed: "
 				.. tostring(startProblem or "unknown")
-			startupLog(selectedText.Text)
-			applying = false
-			cleanupShadow()
-			flashButton(
-				versionFolder:FindFirstChild(versionName),
-				"compile failed"
-			)
-			return
-		end
+		startupLog(selectedText.Text)
+		applying = false
+		cleanupShadow()
+		flashButton(
+			versionFolder:FindFirstChild(versionName),
+			"compile failed"
+		)
+		return
 	end
 
-	if legacyConfig and legacyConfig.customController then
-		task.wait(1)
+	local deadline = os.clock() + 20
+	repeat
+		task.wait(0.05)
+	until state.sessionSerial ~= serial
+		or state.controller ~= controller
+		or controller:GetAttribute("CaelusReady") == true
+		or controller:GetAttribute("CaelusStartError") ~= nil
+		or os.clock() >= deadline
 
-		if state.sessionSerial ~= serial
-			or state.controller ~= controller
-		then
-			applying = false
-			return
-		end
+	if state.sessionSerial ~= serial
+		or state.controller ~= controller
+	then
+		applying = false
+		return
+	end
 
-		local problem
-
-		pcall(function()
-			problem = controller:GetAttribute("CaelusStartError")
-		end)
-
-		if problem then
-			selectedText.Text =
-				"Custom controller start failed: "
-				.. tostring(problem)
-			startupLog(selectedText.Text)
-			cleanupShadow()
-			applying = false
-			return
-		end
-
-		pcall(function()
-			controller:SetAttribute("CaelusReady", true)
-		end)
-	else
-		local deadline = os.clock() + 20
-
-		repeat
-			task.wait(0.05)
-		until state.sessionSerial ~= serial
-			or state.controller ~= controller
-			or controller:GetAttribute("CaelusReady") == true
-			or controller:GetAttribute("CaelusStartError") ~= nil
-			or os.clock() >= deadline
-
-		if state.sessionSerial ~= serial
-			or state.controller ~= controller
-		then
-			applying = false
-			return
-		end
-
-		local problem =
-			controller:GetAttribute("CaelusStartError")
-
-		if controller:GetAttribute("CaelusReady") ~= true then
-			problem = problem
-				or (
-					"controller timeout at "
+	local controllerProblem = controller:GetAttribute("CaelusStartError")
+	if controller:GetAttribute("CaelusReady") ~= true then
+		controllerProblem = controllerProblem
+			or (
+				"controller timeout at "
 					.. tostring(
 						controller:GetAttribute("CaelusStage")
 							or "unknown"
 					)
-				)
-
-			selectedText.Text =
-				"Controller start failed: " .. tostring(problem)
-			startupLog(selectedText.Text)
-			cleanupShadow()
-			applying = false
-			flashButton(
-				versionFolder:FindFirstChild(versionName),
-				"start failed"
 			)
+
+		selectedText.Text =
+			"Controller start failed: " .. tostring(controllerProblem)
+		startupLog(selectedText.Text)
+		cleanupShadow()
+		applying = false
+		flashButton(
+			versionFolder:FindFirstChild(versionName),
+			"start failed"
+		)
+		return
+	end
+
+	-- Melanie installs its outfit in a delayed coroutine after the controller
+	-- announces readiness.  Let that original assembly finish before Direct
+	-- Wear transfers the completed visual pieces to the live R6 character.
+	if legacyConfig and legacyConfig.customController then
+		task.wait(0.75)
+		if state.sessionSerial ~= serial or state.controller ~= controller then
+			applying = false
 			return
 		end
 	end
@@ -4221,25 +4428,6 @@ local function applyMorph(versionName, morphName)
 			.. " / "
 			.. tostring(morphName)
 	)
-
-	if nativeCustomStarted then
-		if state.shadow and state.shadow.Parent then
-			state.shadow:Destroy()
-		end
-
-		state.shadow = nil
-		state.controller = state.externalCustomRuntime
-		state.activeMorph = morphName
-		state.activeVersion = versionName
-
-		selectedText.Text =
-			DISPLAY_NAMES[morphName] or morphName
-		selectedValue.Value = morphName
-		rebuildKeyPanel(versionName)
-		playNamedSound(versionFolder, "Clicksound")
-		applying = false
-		return
-	end
 
 	if state.activeLegacyNeko
 		and not (legacyConfig and legacyConfig.customController)
@@ -6019,7 +6207,7 @@ selectedValue.Value = ""
 rebuildKeyPanel("V4")
 
 if type(environment.CaelusNekoBootStatus) == "function" then
-	environment.CaelusNekoBootStatus("Caelus Neko 3.29: ready")
+	environment.CaelusNekoBootStatus("Caelus Neko 3.30: ready")
 end
 task.delay(0.35, function()
 	local bootGui = environment.CaelusNekoBootGui
