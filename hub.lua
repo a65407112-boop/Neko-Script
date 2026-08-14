@@ -318,6 +318,7 @@ environment.CaelusLegacyNekoConfig = {
 		["Melanie Neko"] = {
 			file = "MelanieNeko.rbxm",
 			display = "Melanie Neko",
+			customController = true,
 			preserveEverything = true,
 		},
 		["Noob Neko"] = {file = "NoobNeko.rbxm", display = "Noob Neko", skinColor = Color3.fromRGB(245, 205, 48), accentColor = Color3.fromRGB(13, 105, 172)},
@@ -2464,6 +2465,89 @@ function environment.CaelusLegacyNekoConfig:loadRoot(name)
 			.. tostring(lastProblem)
 end
 
+function environment.CaelusLegacyNekoConfig:loadCustomController(
+	name,
+	shadow
+)
+	local root, problem = self:loadRoot(name)
+
+	if not root then
+		return nil, problem
+	end
+
+	local function controllerScore(candidate)
+		if not candidate:IsA("LocalScript") then
+			return -1
+		end
+
+		local score = 0
+		local lowered = string.lower(candidate.Name)
+
+		if lowered == "main" then
+			score = score + 100
+		end
+
+		if lowered:find("neko", 1, true) then
+			score = score + 60
+		end
+
+		if lowered:find("controller", 1, true) then
+			score = score + 50
+		end
+
+		if candidate.Parent == root then
+			score = score + 30
+		end
+
+		score = score + math.min(#candidate:GetChildren(), 20)
+
+		return score
+	end
+
+	local customRoot
+	local controller
+
+	if root:IsA("LocalScript") then
+		customRoot = root
+		controller = root
+	else
+		customRoot = root
+		local bestScore = -1
+
+		for _, descendant in ipairs(root:GetDescendants()) do
+			local score = controllerScore(descendant)
+
+			if score > bestScore then
+				bestScore = score
+				controller = descendant
+			end
+		end
+	end
+
+	if not controller then
+		pcall(function()
+			root:Destroy()
+		end)
+
+		return nil,
+			"Custom Neko asset has no runnable LocalScript controller."
+	end
+
+	if customRoot == controller then
+		controller.Name = "CaelusNekoOriginalController"
+		controller.Parent = shadow
+	else
+		customRoot.Name = "CaelusCustomNekoRoot"
+		customRoot.Parent = shadow
+	end
+
+	controller:SetAttribute("CaelusSessionActive", true)
+	controller:SetAttribute("CaelusStartError", nil)
+	controller:SetAttribute("CaelusCustomController", true)
+
+	return controller, nil
+end
+
 function environment.CaelusLegacyNekoConfig:replaceChild(targetParent, sourceParent, childName)
 	if not (targetParent and sourceParent) then
 		return false, "Missing parent for " .. tostring(childName)
@@ -3879,32 +3963,61 @@ local function applyMorph(versionName, morphName)
 	end
 	startFollowing(shadow, visualRoot, realRoot, serial)
 
-	local controller = template:Clone()
-	controller.Name = "CaelusNekoOriginalController"
-	controller:SetAttribute("CaelusSessionActive", true)
-	controller:SetAttribute("CaelusStartError", nil)
-	controller.Parent = shadow
+	local controller
+
+	if legacyConfig and legacyConfig.customController then
+		local customProblem
+
+		controller, customProblem =
+			environment.CaelusLegacyNekoConfig:loadCustomController(
+				morphName,
+				shadow
+			)
+
+		if not controller then
+			selectedText.Text =
+				"Custom controller failed: " .. tostring(customProblem)
+			startupLog(selectedText.Text)
+			cleanupShadow()
+			applying = false
+			return
+		end
+	else
+		controller = template:Clone()
+		controller.Name = "CaelusNekoOriginalController"
+		controller:SetAttribute("CaelusSessionActive", true)
+		controller:SetAttribute("CaelusStartError", nil)
+		controller.Parent = shadow
+	end
+
 	state.controller = controller
 
-	if legacyConfig then
-		local legacyReady, legacyProblem = environment.CaelusLegacyNekoConfig:patchController(
-			controller,
-			morphName
-		)
+	if legacyConfig and not legacyConfig.customController then
+		local legacyReady, legacyProblem =
+			environment.CaelusLegacyNekoConfig:patchController(
+				controller,
+				morphName
+			)
+
 		if not legacyReady then
-			selectedText.Text = "Variant failed: " .. tostring(legacyProblem)
+			selectedText.Text =
+				"Variant failed: " .. tostring(legacyProblem)
 			startupLog(selectedText.Text)
 			cleanupShadow()
 			applying = false
 			return
 		end
 
-		local legacySkinColor = controller:GetAttribute("CaelusLegacySkinColor")
+		local legacySkinColor =
+			controller:GetAttribute("CaelusLegacySkinColor")
+
 		if typeof(legacySkinColor) == "Color3" then
 			state.activeLegacySkinColor = legacySkinColor
 		else
 			state.activeLegacySkinColor = DEFAULT_WHITE_NEKO_SKIN
 		end
+	elseif legacyConfig and legacyConfig.customController then
+		state.activeLegacySkinColor = nil
 	else
 		state.activeLegacySkinColor = nil
 	end
@@ -3946,32 +4059,79 @@ local function applyMorph(versionName, morphName)
 		return
 	end
 
-	local deadline = os.clock() + 20
-	repeat
-		task.wait(0.05)
-	until state.sessionSerial ~= serial
-		or state.controller ~= controller
-		or controller:GetAttribute("CaelusReady") == true
-		or controller:GetAttribute("CaelusStartError") ~= nil
-		or os.clock() >= deadline
-	if state.sessionSerial ~= serial or state.controller ~= controller then
-		applying = false
-		return
-	end
-	local problem = controller:GetAttribute("CaelusStartError")
-	if controller:GetAttribute("CaelusReady") ~= true then
-		problem = problem or ("controller timeout at " .. tostring(controller:GetAttribute("CaelusStage") or "unknown"))
-		selectedText.Text = "Controller start failed: " .. tostring(problem)
-		startupLog(selectedText.Text)
-		cleanupShadow()
-		applying = false
-		flashButton(versionFolder:FindFirstChild(versionName), "start failed")
-		return
+	if legacyConfig and legacyConfig.customController then
+		task.wait(1)
+
+		if state.sessionSerial ~= serial
+			or state.controller ~= controller
+		then
+			applying = false
+			return
+		end
+
+		local problem =
+			controller:GetAttribute("CaelusStartError")
+
+		if problem then
+			selectedText.Text =
+				"Custom controller start failed: "
+				.. tostring(problem)
+			startupLog(selectedText.Text)
+			cleanupShadow()
+			applying = false
+			return
+		end
+
+		controller:SetAttribute("CaelusReady", true)
+	else
+		local deadline = os.clock() + 20
+
+		repeat
+			task.wait(0.05)
+		until state.sessionSerial ~= serial
+			or state.controller ~= controller
+			or controller:GetAttribute("CaelusReady") == true
+			or controller:GetAttribute("CaelusStartError") ~= nil
+			or os.clock() >= deadline
+
+		if state.sessionSerial ~= serial
+			or state.controller ~= controller
+		then
+			applying = false
+			return
+		end
+
+		local problem =
+			controller:GetAttribute("CaelusStartError")
+
+		if controller:GetAttribute("CaelusReady") ~= true then
+			problem = problem
+				or (
+					"controller timeout at "
+					.. tostring(
+						controller:GetAttribute("CaelusStage")
+							or "unknown"
+					)
+				)
+
+			selectedText.Text =
+				"Controller start failed: " .. tostring(problem)
+			startupLog(selectedText.Text)
+			cleanupShadow()
+			applying = false
+			flashButton(
+				versionFolder:FindFirstChild(versionName),
+				"start failed"
+			)
+			return
+		end
 	end
 
 	startupLog("Controller ready: " .. tostring(versionName) .. " / " .. tostring(morphName))
 
-	if state.activeLegacyNeko then
+	if state.activeLegacyNeko
+		and not (legacyConfig and legacyConfig.customController)
+	then
 		if legacyConfig and typeof(legacyConfig.skinColor) == "Color3" then
 			state.activeLegacySkinColor = legacyConfig.skinColor
 		else
@@ -4013,15 +4173,18 @@ local function applyMorph(versionName, morphName)
 	state.morphShirtGraphicTemplate = clothingTemplate(shadow, "ShirtGraphic", "Graphic")
 	collectArmorParts(shadow, controller)
 	state.armorReady = false
-	if not rebuildOriginalLowerBaseWear(shadow) then
-		cleanupShadow()
-		applying = false
-		return
-	end
-	if not rebuildOriginalUpperScarf(shadow) then
-		cleanupShadow()
-		applying = false
-		return
+	if not (legacyConfig and legacyConfig.customController) then
+		if not rebuildOriginalLowerBaseWear(shadow) then
+			cleanupShadow()
+			applying = false
+			return
+		end
+
+		if not rebuildOriginalUpperScarf(shadow) then
+			cleanupShadow()
+			applying = false
+			return
+		end
 	end
 	state.armorReady = true
 	if not state.clothingGuard:uses3DPants() then
@@ -4344,7 +4507,7 @@ local PENDALAR_SCRIPTS = {
 		Description = "Follow a selected player with an R6 animation",
 		Source = [=[
 local Players = game:GetService("Players")
-local TweenService = game:GetService("TweenService")
+local RunService = game:GetService("RunService")
 local LocalPlayer = Players.LocalPlayer
 
 local guiParent = game:GetService("CoreGui")
@@ -4390,7 +4553,7 @@ TitleLabel.Parent = TitleBar
 TitleLabel.Size = UDim2.new(0, 120, 1, 0)
 TitleLabel.Position = UDim2.new(0, 5, 0, 0)
 TitleLabel.Text = "R6 Follow"
-TitleLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+TitleLabel.TextColor3 = Color3.new(1, 1, 1)
 TitleLabel.BackgroundTransparency = 1
 TitleLabel.TextSize = 14
 
@@ -4399,7 +4562,7 @@ CloseButton.Parent = TitleBar
 CloseButton.Size = UDim2.new(0, 25, 1, 0)
 CloseButton.Position = UDim2.new(1, -25, 0, 0)
 CloseButton.Text = "X"
-CloseButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+CloseButton.TextColor3 = Color3.new(1, 1, 1)
 CloseButton.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
 CloseButton.BorderSizePixel = 0
 
@@ -4408,7 +4571,7 @@ MinimizeButton.Parent = TitleBar
 MinimizeButton.Size = UDim2.new(0, 50, 1, 0)
 MinimizeButton.Position = UDim2.new(1, -75, 0, 0)
 MinimizeButton.Text = "Hide"
-MinimizeButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+MinimizeButton.TextColor3 = Color3.new(1, 1, 1)
 MinimizeButton.BackgroundColor3 = Color3.fromRGB(100, 100, 100)
 MinimizeButton.BorderSizePixel = 0
 
@@ -4418,7 +4581,7 @@ TargetTextBox.Size = UDim2.new(0.9, 0, 0, 30)
 TargetTextBox.Position = UDim2.new(0.05, 0, 0.3, 0)
 TargetTextBox.PlaceholderText = "Enter target name"
 TargetTextBox.Text = ""
-TargetTextBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+TargetTextBox.TextColor3 = Color3.new(1, 1, 1)
 TargetTextBox.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
 TargetTextBox.BorderSizePixel = 0
 
@@ -4427,22 +4590,65 @@ ToggleButton.Parent = MainFrame
 ToggleButton.Size = UDim2.new(0.9, 0, 0, 30)
 ToggleButton.Position = UDim2.new(0.05, 0, 0.6, 0)
 ToggleButton.Text = "Start"
-ToggleButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+ToggleButton.TextColor3 = Color3.new(1, 1, 1)
 ToggleButton.BackgroundColor3 = Color3.fromRGB(70, 130, 180)
 ToggleButton.BorderSizePixel = 0
 
 local following = false
 local targetPlayer
-local animationId = "189854234"
 local activeAnimation
+local followConnection
+local collisionState = {}
+
+local function setCharacterCollision(character, enabled)
+	for _, descendant in ipairs(character:GetDescendants()) do
+		if descendant:IsA("BasePart") then
+			if enabled then
+				local previous = collisionState[descendant]
+
+				if previous ~= nil then
+					descendant.CanCollide = previous
+				end
+			else
+				if collisionState[descendant] == nil then
+					collisionState[descendant] = descendant.CanCollide
+				end
+
+				descendant.CanCollide = false
+			end
+		end
+	end
+
+	if enabled then
+		table.clear(collisionState)
+	end
+end
 
 local function stopFollowing()
 	following = false
 	ToggleButton.Text = "Start"
 
+	if followConnection then
+		followConnection:Disconnect()
+		followConnection = nil
+	end
+
 	if activeAnimation then
 		activeAnimation:Stop()
 		activeAnimation = nil
+	end
+
+	local character = LocalPlayer.Character
+
+	if character then
+		setCharacterCollision(character, true)
+
+		local root = character:FindFirstChild("HumanoidRootPart")
+
+		if root then
+			root.AssemblyLinearVelocity = Vector3.zero
+			root.AssemblyAngularVelocity = Vector3.zero
+		end
 	end
 end
 
@@ -4454,34 +4660,32 @@ end)
 local minimized = false
 
 MinimizeButton.MouseButton1Click:Connect(function()
+	minimized = not minimized
+
 	if minimized then
-		MainFrame.Size = UDim2.new(0, 300, 0, 150)
-		MinimizeButton.Text = "Hide"
-	else
 		MainFrame.Size = UDim2.new(0, 300, 0, 25)
 		MinimizeButton.Text = "Show"
+	else
+		MainFrame.Size = UDim2.new(0, 300, 0, 150)
+		MinimizeButton.Text = "Hide"
 	end
-
-	minimized = not minimized
 end)
 
-local function findTarget(targetName)
-	targetName = string.lower(targetName)
+local function findTarget(query)
+	query = string.lower(query)
 
 	for _, candidate in ipairs(Players:GetPlayers()) do
 		if candidate ~= LocalPlayer then
 			local username = string.lower(candidate.Name)
 			local displayName = string.lower(candidate.DisplayName)
 
-			if string.find(username, targetName, 1, true)
-				or string.find(displayName, targetName, 1, true)
+			if string.find(username, query, 1, true)
+				or string.find(displayName, query, 1, true)
 			then
 				return candidate
 			end
 		end
 	end
-
-	return nil
 end
 
 local function playAnimation()
@@ -4493,68 +4697,80 @@ local function playAnimation()
 		return
 	end
 
-	local animation = Instance.new("Animation")
-	animation.AnimationId = "rbxassetid://" .. animationId
+	local animator =
+		humanoid:FindFirstChildOfClass("Animator")
+		or Instance.new("Animator", humanoid)
 
-	activeAnimation = humanoid:LoadAnimation(animation)
+	local animation = Instance.new("Animation")
+	animation.AnimationId = "rbxassetid://189854234"
+
+	activeAnimation = animator:LoadAnimation(animation)
 	activeAnimation:Play()
 end
 
-local function runFollowLoop()
-	while following do
+local function startFollowing()
+	local character = LocalPlayer.Character
+	local humanoid =
+		character and character:FindFirstChildOfClass("Humanoid")
+	local root =
+		character and character:FindFirstChild("HumanoidRootPart")
+
+	if not character or not humanoid or not root then
+		return false
+	end
+
+	if humanoid.Health <= 0 then
+		return false
+	end
+
+	setCharacterCollision(character, false)
+	root.AssemblyLinearVelocity = Vector3.zero
+	root.AssemblyAngularVelocity = Vector3.zero
+
+	followConnection = RunService.Heartbeat:Connect(function()
+		if not following then
+			return
+		end
+
 		local localCharacter = LocalPlayer.Character
+		local localHumanoid =
+			localCharacter
+			and localCharacter:FindFirstChildOfClass("Humanoid")
 		local localRoot =
 			localCharacter
 			and localCharacter:FindFirstChild("HumanoidRootPart")
 
 		local targetCharacter =
 			targetPlayer and targetPlayer.Character
-
+		local targetHumanoid =
+			targetCharacter
+			and targetCharacter:FindFirstChildOfClass("Humanoid")
 		local targetRoot =
 			targetCharacter
 			and targetCharacter:FindFirstChild("HumanoidRootPart")
 
-		if not localRoot or not targetRoot then
+		if not localRoot
+			or not localHumanoid
+			or localHumanoid.Health <= 0
+			or not targetRoot
+			or not targetHumanoid
+			or targetHumanoid.Health <= 0
+		then
 			stopFollowing()
-			break
+			return
 		end
 
-		local forwardCFrame =
-			targetRoot.CFrame * CFrame.new(0, 0, -2.5)
+		localRoot.AssemblyLinearVelocity = Vector3.zero
+		localRoot.AssemblyAngularVelocity = Vector3.zero
 
-		local backwardCFrame =
-			targetRoot.CFrame * CFrame.new(0, 0, -1.3)
+		local safePosition =
+			targetRoot.CFrame
+			* CFrame.new(0, 0, 4)
 
-		local tweenForward = TweenService:Create(
-			localRoot,
-			TweenInfo.new(
-				0.15,
-				Enum.EasingStyle.Linear,
-				Enum.EasingDirection.Out
-			),
-			{CFrame = forwardCFrame}
-		)
+		localRoot.CFrame = safePosition
+	end)
 
-		tweenForward:Play()
-		tweenForward.Completed:Wait()
-
-		if not following then
-			break
-		end
-
-		local tweenBackward = TweenService:Create(
-			localRoot,
-			TweenInfo.new(
-				0.15,
-				Enum.EasingStyle.Linear,
-				Enum.EasingDirection.Out
-			),
-			{CFrame = backwardCFrame}
-		)
-
-		tweenBackward:Play()
-		tweenBackward.Completed:Wait()
-	end
+	return true
 end
 
 ToggleButton.MouseButton1Click:Connect(function()
@@ -4563,16 +4779,16 @@ ToggleButton.MouseButton1Click:Connect(function()
 		return
 	end
 
-	local targetName = TargetTextBox.Text
+	local query = TargetTextBox.Text
 
-	if targetName == "" then
+	if query == "" then
 		warn("[R6 Follow] Enter a target name.")
 		return
 	end
 
-	targetPlayer = findTarget(targetName)
+	targetPlayer = findTarget(query)
 
-	if not targetPlayer or not targetPlayer.Character then
+	if not targetPlayer then
 		warn("[R6 Follow] Target not found.")
 		return
 	end
@@ -4581,7 +4797,17 @@ ToggleButton.MouseButton1Click:Connect(function()
 	ToggleButton.Text = "Stop"
 
 	playAnimation()
-	task.spawn(runFollowLoop)
+
+	if not startFollowing() then
+		stopFollowing()
+		warn("[R6 Follow] Character is not ready.")
+	end
+end)
+
+LocalPlayer.CharacterAdded:Connect(function()
+	if following then
+		stopFollowing()
+	end
 end)
 ]=],
 	},
