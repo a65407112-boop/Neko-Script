@@ -1,5 +1,5 @@
 -- File: LOAD_NEKO_SHADOW_CUSTOM_3_27_PERSISTENT_PRESETS.lua
--- Caelus Neko Hub Runtime 3.32 Brazil Miku
+-- Caelus Neko Hub Runtime 3.32.1 Brazil Miku Fixes
 -- Adds Brazil Miku while preserving the built-in Fling, safe Follow, and Direct Wear fixes.
 
 if not game:IsLoaded() then
@@ -14,7 +14,7 @@ local Debris = game:GetService("Debris")
 local HttpService = game:GetService("HttpService")
 
 local environment = (type(getgenv) == "function" and getgenv()) or _G
-local RUNTIME_VERSION = "3.32-brazil-miku"
+local RUNTIME_VERSION = "3.32.1-brazil-miku-fixes"
 
 local function startupLog(message)
 	pcall(function()
@@ -4845,22 +4845,27 @@ local PENDALAR_SCRIPTS = {
 		Description = "Follow a selected player with an R6 animation",
 		Source = [=[
 local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")
 local LocalPlayer = Players.LocalPlayer
 local RuntimeEnvironment =
 	(type(getgenv) == "function" and getgenv()) or _G
 
 local previousRuntime = RuntimeEnvironment.CaelusR6FollowRuntime
+
 if type(previousRuntime) == "table"
 	and type(previousRuntime.Destroy) == "function"
 then
-	pcall(function() previousRuntime:Destroy() end)
+	pcall(function()
+		previousRuntime:Destroy()
+	end)
 end
 
 local Runtime = {
 	Destroyed = false,
+	Following = false,
 	Connections = {},
+	FollowToken = 0,
 }
+
 RuntimeEnvironment.CaelusR6FollowRuntime = Runtime
 
 local function remember(connection)
@@ -4896,9 +4901,9 @@ MainFrame.BorderSizePixel = 0
 MainFrame.Active = true
 MainFrame.Draggable = true
 
-local UICorner = Instance.new("UICorner")
-UICorner.Parent = MainFrame
-UICorner.CornerRadius = UDim.new(0, 20)
+local MainCorner = Instance.new("UICorner")
+MainCorner.CornerRadius = UDim.new(0, 20)
+MainCorner.Parent = MainFrame
 
 local TitleBar = Instance.new("Frame")
 TitleBar.Parent = MainFrame
@@ -4910,9 +4915,9 @@ local TitleLabel = Instance.new("TextLabel")
 TitleLabel.Parent = TitleBar
 TitleLabel.Size = UDim2.new(0, 120, 1, 0)
 TitleLabel.Position = UDim2.new(0, 5, 0, 0)
+TitleLabel.BackgroundTransparency = 1
 TitleLabel.Text = "R6 Follow"
 TitleLabel.TextColor3 = Color3.new(1, 1, 1)
-TitleLabel.BackgroundTransparency = 1
 TitleLabel.TextSize = 14
 
 local CloseButton = Instance.new("TextButton")
@@ -4952,55 +4957,222 @@ ToggleButton.TextColor3 = Color3.new(1, 1, 1)
 ToggleButton.BackgroundColor3 = Color3.fromRGB(70, 130, 180)
 ToggleButton.BorderSizePixel = 0
 
-local following = false
 local targetPlayer
 local activeAnimation
-local activeAnimationObject
-local followConnection
+local animationObject
 
-local function stopFollowing()
-	following = false
-	ToggleButton.Text = "Start"
-
-	if followConnection then
-		followConnection:Disconnect()
-		followConnection = nil
-	end
-
+local function stopAnimation()
 	if activeAnimation then
-		pcall(function() activeAnimation:Stop(0.1) end)
+		pcall(function()
+			activeAnimation:Stop(0.1)
+		end)
 		activeAnimation = nil
 	end
-	if activeAnimationObject then
-		activeAnimationObject:Destroy()
-		activeAnimationObject = nil
+
+	if animationObject then
+		animationObject:Destroy()
+		animationObject = nil
 	end
+end
+
+local function stopFollowing()
+	Runtime.Following = false
+	Runtime.FollowToken = Runtime.FollowToken + 1
+	ToggleButton.Text = "Start"
+	stopAnimation()
 
 	local character = LocalPlayer.Character
 	local humanoid =
 		character and character:FindFirstChildOfClass("Humanoid")
 
 	if humanoid then
-		humanoid:Move(Vector3.zero, false)
+		pcall(function()
+			humanoid:Move(Vector3.zero, false)
+			humanoid:MoveTo(
+				character:GetPivot().Position
+			)
+		end)
 	end
 end
 
 function Runtime:Destroy()
-	if self.Destroyed then return end
+	if self.Destroyed then
+		return
+	end
+
 	self.Destroyed = true
 	stopFollowing()
 
 	for _, connection in ipairs(self.Connections) do
-		pcall(function() connection:Disconnect() end)
+		pcall(function()
+			connection:Disconnect()
+		end)
 	end
+
 	table.clear(self.Connections)
 
 	if ScreenGui and ScreenGui.Parent then
 		ScreenGui:Destroy()
 	end
+
 	if RuntimeEnvironment.CaelusR6FollowRuntime == self then
 		RuntimeEnvironment.CaelusR6FollowRuntime = nil
 	end
+end
+
+local function findTarget(query)
+	query = string.lower(query)
+
+	for _, candidate in ipairs(Players:GetPlayers()) do
+		if candidate ~= LocalPlayer then
+			local username = string.lower(candidate.Name)
+			local displayName = string.lower(candidate.DisplayName)
+
+			if string.find(username, query, 1, true)
+				or string.find(displayName, query, 1, true)
+			then
+				return candidate
+			end
+		end
+	end
+
+	return nil
+end
+
+local function playAnimation()
+	local character = LocalPlayer.Character
+	local humanoid =
+		character and character:FindFirstChildOfClass("Humanoid")
+
+	if not humanoid or humanoid.Health <= 0 then
+		return false, "Character is not ready."
+	end
+
+	local animator =
+		humanoid:FindFirstChildOfClass("Animator")
+
+	if not animator then
+		animator = Instance.new("Animator")
+		animator.Parent = humanoid
+	end
+
+	animationObject = Instance.new("Animation")
+	animationObject.AnimationId = "rbxassetid://189854234"
+
+	local ok, trackOrProblem = pcall(function()
+		return animator:LoadAnimation(animationObject)
+	end)
+
+	if not ok then
+		animationObject:Destroy()
+		animationObject = nil
+		return false, tostring(trackOrProblem)
+	end
+
+	activeAnimation = trackOrProblem
+
+	pcall(function()
+		activeAnimation.Looped = true
+		activeAnimation.Priority = Enum.AnimationPriority.Action
+		activeAnimation:Play(0.1)
+	end)
+
+	return true
+end
+
+local function startFollowing()
+	local character = LocalPlayer.Character
+	local humanoid =
+		character and character:FindFirstChildOfClass("Humanoid")
+	local root =
+		character and character:FindFirstChild("HumanoidRootPart")
+
+	if not humanoid
+		or humanoid.Health <= 0
+		or not root
+	then
+		return false, "Your character is not ready."
+	end
+
+	local targetCharacter = targetPlayer and targetPlayer.Character
+	local targetHumanoid =
+		targetCharacter
+		and targetCharacter:FindFirstChildOfClass("Humanoid")
+	local targetRoot =
+		targetCharacter
+		and targetCharacter:FindFirstChild("HumanoidRootPart")
+
+	if not targetHumanoid
+		or targetHumanoid.Health <= 0
+		or not targetRoot
+	then
+		return false, "Target character is not ready."
+	end
+
+	Runtime.Following = true
+	Runtime.FollowToken = Runtime.FollowToken + 1
+	local token = Runtime.FollowToken
+	ToggleButton.Text = "Stop"
+
+	task.spawn(function()
+		while Runtime.Following
+			and not Runtime.Destroyed
+			and Runtime.FollowToken == token
+		do
+			local localCharacter = LocalPlayer.Character
+			local localHumanoid =
+				localCharacter
+				and localCharacter:FindFirstChildOfClass("Humanoid")
+			local localRoot =
+				localCharacter
+				and localCharacter:FindFirstChild("HumanoidRootPart")
+
+			local currentTargetCharacter =
+				targetPlayer and targetPlayer.Character
+			local currentTargetHumanoid =
+				currentTargetCharacter
+				and currentTargetCharacter:FindFirstChildOfClass(
+					"Humanoid"
+				)
+			local currentTargetRoot =
+				currentTargetCharacter
+				and currentTargetCharacter:FindFirstChild(
+					"HumanoidRootPart"
+				)
+
+			if not localHumanoid
+				or localHumanoid.Health <= 0
+				or not localRoot
+				or not currentTargetHumanoid
+				or currentTargetHumanoid.Health <= 0
+				or not currentTargetRoot
+			then
+				stopFollowing()
+				break
+			end
+
+			local desiredPosition =
+				currentTargetRoot.Position
+				- currentTargetRoot.CFrame.LookVector * 4
+
+			local distance =
+				(localRoot.Position - desiredPosition).Magnitude
+
+			if distance > 3 then
+				pcall(function()
+					localHumanoid:MoveTo(desiredPosition)
+				end)
+			else
+				pcall(function()
+					localHumanoid:Move(Vector3.zero, false)
+				end)
+			end
+
+			task.wait(0.12)
+		end
+	end)
+
+	return true
 end
 
 remember(CloseButton.MouseButton1Click:Connect(function()
@@ -5021,156 +5193,8 @@ remember(MinimizeButton.MouseButton1Click:Connect(function()
 	end
 end))
 
-local function findTarget(query)
-	query = string.lower(query)
-
-	for _, candidate in ipairs(Players:GetPlayers()) do
-		if candidate ~= LocalPlayer then
-			local username = string.lower(candidate.Name)
-			local displayName = string.lower(candidate.DisplayName)
-
-			if string.find(username, query, 1, true)
-				or string.find(displayName, query, 1, true)
-			then
-				return candidate
-			end
-		end
-	end
-end
-
-local function playAnimation()
-	local character = LocalPlayer.Character
-	local humanoid =
-		character and character:FindFirstChildOfClass("Humanoid")
-
-	if not humanoid
-		or humanoid.RigType ~= Enum.HumanoidRigType.R6
-	then
-		return false, "R6 character is required."
-	end
-
-	-- Direct Wear already mirrors the selected Neko controller's animation to
-	-- the real R6.  Loading a second track there causes joint fighting, so the
-	-- follow tool leaves the existing Neko animation untouched.
-	local nekoApi = RuntimeEnvironment.CaelusNekoAPI
-	local nekoSession = type(nekoApi) == "table" and nekoApi.Session
-	if type(nekoSession) == "table" and nekoSession.activeMorph then
-		return true
-	end
-
-	local animator =
-		humanoid:FindFirstChildOfClass("Animator")
-		or Instance.new("Animator", humanoid)
-
-	local animation = Instance.new("Animation")
-	animation.AnimationId = "rbxassetid://189854234"
-	activeAnimationObject = animation
-
-	local ok, trackOrProblem = pcall(function()
-		return animator:LoadAnimation(animation)
-	end)
-	if not ok then
-		animation:Destroy()
-		activeAnimationObject = nil
-		return false, tostring(trackOrProblem)
-	end
-
-	activeAnimation = trackOrProblem
-	pcall(function()
-		activeAnimation.Looped = true
-		activeAnimation.Priority = Enum.AnimationPriority.Movement
-		activeAnimation:Play(0.15)
-	end)
-	return true
-end
-
-local function startFollowing()
-	local character = LocalPlayer.Character
-	local humanoid =
-		character and character:FindFirstChildOfClass("Humanoid")
-	local root =
-		character and character:FindFirstChild("HumanoidRootPart")
-
-	if not (humanoid and humanoid.Health > 0
-		and humanoid.RigType == Enum.HumanoidRigType.R6
-		and root and root:IsA("BasePart"))
-	then
-		return false, "A living R6 character is required."
-	end
-
-	followConnection = RunService.Heartbeat:Connect(function()
-		if not following or Runtime.Destroyed then return end
-
-		local localCharacter = LocalPlayer.Character
-		local localHumanoid =
-			localCharacter
-			and localCharacter:FindFirstChildOfClass("Humanoid")
-		local localRoot =
-			localCharacter
-			and localCharacter:FindFirstChild("HumanoidRootPart")
-
-		local targetCharacter =
-			targetPlayer and targetPlayer.Character
-		local targetHumanoid =
-			targetCharacter
-			and targetCharacter:FindFirstChildOfClass("Humanoid")
-		local targetRoot =
-			targetCharacter
-			and targetCharacter:FindFirstChild("HumanoidRootPart")
-
-		if not localHumanoid
-			or localHumanoid.Health <= 0
-			or not localRoot
-			or not targetHumanoid
-			or targetHumanoid.Health <= 0
-			or not targetRoot
-		then
-			stopFollowing()
-			return
-		end
-
-		local desired = targetRoot.Position
-			- targetRoot.CFrame.LookVector * 4
-		local difference = desired - localRoot.Position
-		local horizontal = Vector3.new(difference.X, 0, difference.Z)
-
-		-- Never teleport, replace the character, write Health, or force root
-		-- velocity.  Follow is ordinary Humanoid movement with a ledge check.
-		if math.abs(difference.Y) > 12 or horizontal.Magnitude <= 4.5 then
-			localHumanoid:Move(Vector3.zero, false)
-			return
-		end
-
-		local direction = horizontal.Unit
-		local params = RaycastParams.new()
-		params.FilterType = Enum.RaycastFilterType.Exclude
-		params.FilterDescendantsInstances = {
-			localCharacter,
-			targetCharacter,
-		}
-		params.IgnoreWater = false
-
-		local probeOrigin = localRoot.Position
-			+ direction * 2.5
-			+ Vector3.new(0, 2.5, 0)
-		local ground = workspace:Raycast(
-			probeOrigin,
-			Vector3.new(0, -10, 0),
-			params
-		)
-
-		if ground then
-			localHumanoid:Move(direction, false)
-		else
-			localHumanoid:Move(Vector3.zero, false)
-		end
-	end)
-
-	return true, nil
-end
-
 remember(ToggleButton.MouseButton1Click:Connect(function()
-	if following then
+	if Runtime.Following then
 		stopFollowing()
 		return
 	end
@@ -5189,15 +5213,17 @@ remember(ToggleButton.MouseButton1Click:Connect(function()
 		return
 	end
 
-	following = true
-	ToggleButton.Text = "Stop"
-
 	local animationReady, animationProblem = playAnimation()
+
 	if not animationReady and animationProblem then
-		warn("[R6 Follow] Animation skipped: " .. animationProblem)
+		warn(
+			"[R6 Follow] Animation skipped: "
+				.. tostring(animationProblem)
+		)
 	end
 
 	local started, startProblem = startFollowing()
+
 	if not started then
 		stopFollowing()
 		warn("[R6 Follow] " .. tostring(startProblem))
@@ -5224,16 +5250,6 @@ environment.CaelusPendalarNekoUI = {
 	FlingToggleButton = nil,
 	FlingGui = nil,
 	FlingHideConnection = nil,
-	FlingCapturedGuis = {},
-	FlingStepConnection = nil,
-	FlingRestoreConnection = nil,
-	FlingDeathConnection = nil,
-	FlingCharacterConnection = nil,
-	FlingRoot = nil,
-	FlingSavedRotation = nil,
-	FlingSavedLinearVelocity = nil,
-	FlingSavedAngularVelocity = nil,
-	FlingRuntimeToken = 0,
 	FlingSourceUrl =
 		"https://rawscripts.net/raw/Universal-Script-Touch-fling-script-22447",
 	Scripts = PENDALAR_SCRIPTS,
@@ -5377,108 +5393,100 @@ function environment.CaelusPendalarNekoUI:CollectTopLevelGuis()
 	return result
 end
 
-function environment.CaelusPendalarNekoUI:HideOriginalFlingGui()
-	for _, flingGui in ipairs(self.FlingCapturedGuis) do
-		if flingGui and flingGui.Parent then
-			pcall(function()
-				flingGui.Enabled = false
-			end)
+function environment.CaelusPendalarNekoUI:FindTouchFlingControls(
+	preferredGuis
+)
+	local function inspect(gui)
+		if not gui or not gui.Parent then
+			return nil, nil
+		end
+
+		local hasTouchFlingTitle = false
+		local toggleButton
+
+		for _, descendant in ipairs(gui:GetDescendants()) do
+			if descendant:IsA("TextLabel") then
+				local textValue = string.lower(
+					tostring(descendant.Text or "")
+				)
+
+				if textValue:find("touch fling", 1, true) then
+					hasTouchFlingTitle = true
+				end
+			elseif descendant:IsA("TextButton") then
+				local textValue = string.upper(
+					tostring(descendant.Text or "")
+				)
+
+				if textValue == "ON" or textValue == "OFF" then
+					toggleButton = descendant
+				end
+			end
+		end
+
+		if hasTouchFlingTitle and toggleButton then
+			return gui, toggleButton
+		end
+
+		return nil, nil
+	end
+
+	for _, gui in ipairs(preferredGuis or {}) do
+		local foundGui, button = inspect(gui)
+
+		if foundGui then
+			return foundGui, button
 		end
 	end
 
-	if self.FlingGui and self.FlingGui.Parent then
-		pcall(function()
-			self.FlingGui.Enabled = false
-		end)
-	end
-end
+	for _, root in ipairs(self:GetGuiRoots()) do
+		for _, child in ipairs(root:GetChildren()) do
+			if child:IsA("LayerCollector") then
+				local foundGui, button = inspect(child)
 
-function environment.CaelusPendalarNekoUI:ScoreFlingButton(button)
-	if not button or not button:IsA("GuiButton") then
-		return -1
-	end
-
-	local textValue = ""
-	local ok = pcall(function()
-		textValue = string.lower(tostring(button.Text or ""))
-	end)
-
-	if not ok then
-		textValue = ""
-	end
-
-	local nameValue = string.lower(tostring(button.Name or ""))
-	local combined = textValue .. " " .. nameValue
-	local score = 0
-
-	if combined:find("fling", 1, true) then
-		score = score + 50
-	end
-
-	if combined:find("touch", 1, true) then
-		score = score + 30
-	end
-
-	if combined:find("toggle", 1, true) then
-		score = score + 15
-	end
-
-	if combined:find("on", 1, true)
-		or combined:find("off", 1, true)
-	then
-		score = score + 8
-	end
-
-	if combined:find("start", 1, true)
-		or combined:find("stop", 1, true)
-	then
-		score = score + 4
-	end
-
-	return score
-end
-
-function environment.CaelusPendalarNekoUI:FindOriginalFlingButton()
-	local bestButton
-	local bestScore = -1
-	local candidates = {}
-
-	for _, gui in ipairs(self.FlingCapturedGuis) do
-		if gui and gui.Parent then
-			for _, descendant in ipairs(gui:GetDescendants()) do
-				if descendant:IsA("GuiButton") then
-					table.insert(candidates, descendant)
-
-					local score =
-						self:ScoreFlingButton(descendant)
-
-					if score > bestScore then
-						bestScore = score
-						bestButton = descendant
-					end
+				if foundGui then
+					return foundGui, button
 				end
 			end
 		end
 	end
 
-	if bestButton and bestScore > 0 then
-		return bestButton
-	end
-
-	if #candidates == 1 then
-		return candidates[1]
-	end
-
-	return nil
+	return nil, nil
 end
 
-function environment.CaelusPendalarNekoUI:FireGuiSignal(signal)
-	if not signal then
+function environment.CaelusPendalarNekoUI:HideOriginalFlingGui()
+	local flingGui = self.FlingGui
+
+	if not flingGui or not flingGui.Parent then
+		return
+	end
+
+	pcall(function()
+		flingGui.Enabled = false
+	end)
+end
+
+function environment.CaelusPendalarNekoUI:GetOriginalFlingState()
+	local button = self.FlingToggleButton
+
+	if not button or not button.Parent then
 		return false
 	end
 
+	return string.upper(tostring(button.Text or "")) == "ON"
+end
+
+function environment.CaelusPendalarNekoUI:FireOriginalFlingButton()
+	local button = self.FlingToggleButton
+
+	if not button or not button.Parent then
+		return false, "Original Touch Fling toggle is missing."
+	end
+
 	if type(firesignal) == "function" then
-		local ok = pcall(firesignal, signal)
+		local ok = pcall(function()
+			firesignal(button.MouseButton1Click)
+		end)
 
 		if ok then
 			return true
@@ -5486,8 +5494,10 @@ function environment.CaelusPendalarNekoUI:FireGuiSignal(signal)
 	end
 
 	if type(getconnections) == "function" then
-		local ok, connections =
-			pcall(getconnections, signal)
+		local ok, connections = pcall(
+			getconnections,
+			button.MouseButton1Click
+		)
 
 		if ok and type(connections) == "table" then
 			local fired = false
@@ -5510,75 +5520,17 @@ function environment.CaelusPendalarNekoUI:FireGuiSignal(signal)
 		end
 	end
 
-	return false
-end
-
-function environment.CaelusPendalarNekoUI:TriggerOriginalFlingButton()
-	local button = self.FlingToggleButton
-
-	if not button or not button.Parent then
-		return false,
-			"Original Touch Fling button is missing."
-	end
-
-	local fired = false
-
-	pcall(function()
-		fired =
-			self:FireGuiSignal(button.Activated)
-			or fired
-	end)
-
-	pcall(function()
-		fired =
-			self:FireGuiSignal(button.MouseButton1Click)
-			or fired
-	end)
-
-	pcall(function()
-		fired =
-			self:FireGuiSignal(button.MouseButton1Down)
-			or fired
-	end)
-
-	if not fired then
-		return false,
-			"Executor could not fire the original Touch Fling toggle."
-	end
-
-	self:HideOriginalFlingGui()
-	return true
-end
-
-function environment.CaelusPendalarNekoUI:SetOriginalTouchFling(
-	enabled
-)
-	if not self.FlingLoaded then
-		return false, "Original Touch Fling did not load."
-	end
-
-	enabled = enabled == true
-
-	if self.FlingEnabled == enabled then
-		self:HideOriginalFlingGui()
-		return true
-	end
-
-	local triggered, problem =
-		self:TriggerOriginalFlingButton()
-
-	if not triggered then
-		return false, problem
-	end
-
-	self.FlingEnabled = enabled
-	self:HideOriginalFlingGui()
-
-	return true
+	return false,
+		"Executor does not expose firesignal/getconnections."
 end
 
 function environment.CaelusPendalarNekoUI:LoadOriginalTouchFling()
-	if self.FlingLoaded then
+	if self.FlingLoaded
+		and self.FlingGui
+		and self.FlingGui.Parent
+		and self.FlingToggleButton
+		and self.FlingToggleButton.Parent
+	then
 		self:HideOriginalFlingGui()
 		return true
 	end
@@ -5589,7 +5541,7 @@ function environment.CaelusPendalarNekoUI:LoadOriginalTouchFling()
 
 	if not sourceText then
 		return false,
-			"Touch Fling download failed: "
+			"Touch Fling loader download failed: "
 				.. tostring(fetchProblem)
 	end
 
@@ -5599,12 +5551,12 @@ function environment.CaelusPendalarNekoUI:LoadOriginalTouchFling()
 
 	local chunk, compileProblem = loadstring(
 		sourceText,
-		"=PendalarOriginalTouchFlingLoader"
+		"=PendalarOriginalTouchFling"
 	)
 
 	if not chunk then
 		return false,
-			"Touch Fling compile failed: "
+			"Touch Fling loader compile failed: "
 				.. tostring(compileProblem)
 	end
 
@@ -5612,54 +5564,45 @@ function environment.CaelusPendalarNekoUI:LoadOriginalTouchFling()
 
 	if not ok then
 		return false,
-			"Touch Fling runtime failed: "
+			"Touch Fling loader runtime failed: "
 				.. tostring(runtimeProblem)
 	end
 
-	local deadline = os.clock() + 3
+	local deadline = os.clock() + 4
+	local foundGui
+	local foundButton
 
 	repeat
 		task.wait(0.1)
 
 		local after = self:CollectTopLevelGuis()
+		local newGuis = {}
 
 		for gui in pairs(after) do
 			if not before[gui] then
-				local alreadyCaptured = false
-
-				for _, captured in ipairs(self.FlingCapturedGuis) do
-					if captured == gui then
-						alreadyCaptured = true
-						break
-					end
-				end
-
-				if not alreadyCaptured then
-					table.insert(self.FlingCapturedGuis, gui)
-				end
+				table.insert(newGuis, gui)
 			end
 		end
-	until #self.FlingCapturedGuis > 0
-		or os.clock() >= deadline
 
-	self.FlingToggleButton =
-		self:FindOriginalFlingButton()
+		foundGui, foundButton =
+			self:FindTouchFlingControls(newGuis)
 
-	if self.FlingToggleButton then
-		local current = self.FlingToggleButton
-
-		while current do
-			if current:IsA("LayerCollector") then
-				self.FlingGui = current
-				break
-			end
-
-			current = current.Parent
+		if not foundGui then
+			foundGui, foundButton =
+				self:FindTouchFlingControls()
 		end
+	until foundGui or os.clock() >= deadline
+
+	if not foundGui or not foundButton then
+		return false,
+			"Original Touch Fling ran, but its Touch Fling/OFF GUI "
+				.. "could not be located."
 	end
 
+	self.FlingGui = foundGui
+	self.FlingToggleButton = foundButton
 	self.FlingLoaded = true
-	self.FlingEnabled = false
+	self.FlingEnabled = self:GetOriginalFlingState()
 
 	if self.FlingHideConnection then
 		self.FlingHideConnection:Disconnect()
@@ -5672,202 +5615,43 @@ function environment.CaelusPendalarNekoUI:LoadOriginalTouchFling()
 
 	self:HideOriginalFlingGui()
 
-	if not self.FlingToggleButton then
-		return false,
-			"Touch Fling loaded but its original toggle "
-				.. "button could not be found."
-	end
-
 	return true
 end
 
--- Built-in replacement for the old remote Touch Fling GUI.  The previous
--- implementation downloaded two nested loaders, guessed which GUI they had
--- created and then tried to fire that GUI's private button connections.  This
--- runtime is controlled directly by Pendalar's Settings toggle instead.
-function environment.CaelusPendalarNekoUI:DetachBuiltInTouchFling()
-	self.FlingRuntimeToken = (self.FlingRuntimeToken or 0) + 1
+function environment.CaelusPendalarNekoUI:SetOriginalTouchFling(
+	enabled
+)
+	local loaded, loadProblem = self:LoadOriginalTouchFling()
 
-	for _, connectionName in ipairs({
-		"FlingStepConnection",
-		"FlingRestoreConnection",
-		"FlingDeathConnection",
-	}) do
-		local connection = self[connectionName]
-		if connection then
-			pcall(function() connection:Disconnect() end)
-			self[connectionName] = nil
-		end
-	end
-
-	local root = self.FlingRoot
-	if root and root.Parent then
-		local savedLinear = self.FlingSavedLinearVelocity
-		local savedAngular = self.FlingSavedAngularVelocity
-
-		pcall(function()
-			if typeof(savedLinear) == "Vector3"
-				and root.AssemblyLinearVelocity.Magnitude > 150
-			then
-				root.AssemblyLinearVelocity = savedLinear
-			end
-			root.AssemblyAngularVelocity =
-				typeof(savedAngular) == "Vector3"
-					and savedAngular or Vector3.zero
-		end)
-	end
-
-	self.FlingRoot = nil
-	self.FlingSavedRotation = nil
-	self.FlingSavedLinearVelocity = nil
-	self.FlingSavedAngularVelocity = nil
-end
-
-function environment.CaelusPendalarNekoUI:AttachBuiltInTouchFling(character)
-	self:DetachBuiltInTouchFling()
-	if not self.FlingEnabled then return true end
-
-	character = character or player.Character
-	local humanoid =
-		character and character:FindFirstChildOfClass("Humanoid")
-	local root =
-		character and character:FindFirstChild("HumanoidRootPart")
-	if not (humanoid and humanoid.Health > 0
-		and root and root:IsA("BasePart"))
-	then
-		return false, "Character is not ready for Touch Fling."
-	end
-
-	self.FlingRoot = root
-	self.FlingRuntimeToken = (self.FlingRuntimeToken or 0) + 1
-	local token = self.FlingRuntimeToken
-	local runService = game:GetService("RunService")
-	local beforePhysics = runService.Stepped
-	local afterPhysics = runService.Heartbeat
-
-	pcall(function()
-		beforePhysics = runService.PreSimulation
-	end)
-	pcall(function()
-		afterPhysics = runService.PostSimulation
-	end)
-
-	self.FlingStepConnection = beforePhysics:Connect(function()
-		if not self.FlingEnabled
-			or self.FlingRuntimeToken ~= token
-			or player.Character ~= character
-			or not root.Parent
-			or humanoid.Health <= 0
-		then
-			return
-		end
-
-		self.FlingSavedRotation = root.CFrame - root.Position
-		self.FlingSavedLinearVelocity = root.AssemblyLinearVelocity
-		self.FlingSavedAngularVelocity = root.AssemblyAngularVelocity
-
-		-- The one physics-step spin transfers momentum on contact.  The paired
-		-- post-step callback restores our own orientation and dangerous velocity.
-		root.AssemblyAngularVelocity = Vector3.new(0, 900000, 0)
-	end)
-
-	self.FlingRestoreConnection = afterPhysics:Connect(function()
-		if not self.FlingEnabled
-			or self.FlingRuntimeToken ~= token
-			or player.Character ~= character
-			or not root.Parent
-		then
-			return
-		end
-
-		local rotation = self.FlingSavedRotation
-		local savedLinear = self.FlingSavedLinearVelocity
-		local savedAngular = self.FlingSavedAngularVelocity
-
-		pcall(function()
-			local postPhysicsLinear = root.AssemblyLinearVelocity
-			local safeLinear = postPhysicsLinear
-			if typeof(savedLinear) == "Vector3"
-				and postPhysicsLinear.Magnitude > 150
-			then
-				safeLinear = savedLinear
-			end
-			if typeof(rotation) == "CFrame" then
-				root.CFrame = CFrame.new(root.Position) * rotation
-			end
-			root.AssemblyLinearVelocity = safeLinear
-			root.AssemblyAngularVelocity =
-				typeof(savedAngular) == "Vector3"
-					and savedAngular or Vector3.zero
-		end)
-	end)
-
-	self.FlingDeathConnection = humanoid.Died:Connect(function()
-		if self.FlingRuntimeToken == token then
-			self:DetachBuiltInTouchFling()
-		end
-	end)
-
-	return true
-end
-
-function environment.CaelusPendalarNekoUI:HideOriginalFlingGui()
-	-- Kept as a compatibility no-op for older code that calls this method.
-end
-
-function environment.CaelusPendalarNekoUI:LoadOriginalTouchFling()
-	self.FlingLoaded = true
-	return true
-end
-
-function environment.CaelusPendalarNekoUI:SetOriginalTouchFling(enabled)
-	if not self.FlingLoaded then
-		local loaded, problem = self:LoadOriginalTouchFling()
-		if not loaded then return false, problem end
+	if not loaded then
+		return false, loadProblem
 	end
 
 	enabled = enabled == true
-	if self.FlingEnabled == enabled then
-		if enabled and not (self.FlingRoot and self.FlingRoot.Parent) then
-			return self:AttachBuiltInTouchFling(player.Character)
-		end
+
+	local actualState = self:GetOriginalFlingState()
+
+	if actualState == enabled then
+		self.FlingEnabled = actualState
+		self:HideOriginalFlingGui()
 		return true
 	end
 
-	if not enabled then
-		self.FlingEnabled = false
-		if self.FlingCharacterConnection then
-			self.FlingCharacterConnection:Disconnect()
-			self.FlingCharacterConnection = nil
-		end
-		self:DetachBuiltInTouchFling()
-		return true
+	local fired, fireProblem = self:FireOriginalFlingButton()
+
+	if not fired then
+		return false, fireProblem
 	end
 
-	self.FlingEnabled = true
-	if self.FlingCharacterConnection then
-		self.FlingCharacterConnection:Disconnect()
-	end
-	self.FlingCharacterConnection = player.CharacterAdded:Connect(function(character)
-		task.delay(0.35, function()
-			if self.FlingEnabled and player.Character == character then
-				local attached, problem =
-					self:AttachBuiltInTouchFling(character)
-				if not attached then
-					warn("[Pendalar Touch Fling] " .. tostring(problem))
-				end
-			end
-		end)
-	end)
+	task.wait(0.08)
 
-	local attached, problem = self:AttachBuiltInTouchFling(player.Character)
-	if not attached then
-		self.FlingEnabled = false
-		if self.FlingCharacterConnection then
-			self.FlingCharacterConnection:Disconnect()
-			self.FlingCharacterConnection = nil
-		end
-		return false, problem
+	actualState = self:GetOriginalFlingState()
+	self.FlingEnabled = actualState
+	self:HideOriginalFlingGui()
+
+	if actualState ~= enabled then
+		return false,
+			"Original Touch Fling toggle did not change state."
 	end
 
 	return true
@@ -6280,7 +6064,7 @@ function environment.CaelusPendalarNekoUI:Build()
 
 	settingsTab:NewBoolButton(
 		"Touch Fling",
-		"Built-in touch fling controlled directly by this toggle",
+		"Original hidden Touch Fling script controlled by this toggle",
 		function(enabled)
 			local changed, problem =
 				self:SetOriginalTouchFling(enabled)
