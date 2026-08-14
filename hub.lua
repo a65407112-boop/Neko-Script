@@ -1227,9 +1227,22 @@ local function syncDirectPose()
 		local driverJoint = pair.driverJoint
 		local motor = pair.motor
 		if driverJoint and driverJoint.Parent and motor and motor.Parent then
-			local desiredRelative = driverJoint.C0 * driverJoint.C1:Inverse()
+			local driverTransform = CFrame.new()
+
+			if driverJoint:IsA("Motor6D") then
+				driverTransform = driverJoint.Transform
+			end
+
+			local desiredRelative =
+				driverJoint.C0
+				* driverTransform
+				* driverJoint.C1:Inverse()
+
 			pcall(function()
-				motor.Transform = pair.baseC0:Inverse() * desiredRelative * pair.baseC1
+				motor.Transform =
+					pair.baseC0:Inverse()
+					* desiredRelative
+					* pair.baseC1
 			end)
 		end
 	end
