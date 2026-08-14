@@ -462,48 +462,6 @@ local function remember(connection)
 	return connection
 end
 
-morphList.Active = true
-morphList.ScrollingEnabled = true
-morphList.ScrollingDirection = Enum.ScrollingDirection.Y
-morphList.AutomaticCanvasSize = Enum.AutomaticSize.None
-
-environment.CaelusLegacyNekoConfig.refreshMorphCanvas = function()
-	if not (morphList and morphList.Parent) then
-		return
-	end
-
-	local contentBottom = morphList.AbsoluteSize.Y
-
-	for _, child in ipairs(morphList:GetChildren()) do
-		if child:IsA("GuiObject") and child.Visible then
-			local childBottom =
-				child.AbsolutePosition.Y
-				- morphList.AbsolutePosition.Y
-				+ morphList.CanvasPosition.Y
-				+ child.AbsoluteSize.Y
-
-			contentBottom = math.max(contentBottom, childBottom)
-		end
-	end
-
-	morphList.CanvasSize = UDim2.fromOffset(
-		0,
-		math.ceil(contentBottom + 28)
-	)
-end
-
-remember(morphList.ChildAdded:Connect(function()
-	task.defer(environment.CaelusLegacyNekoConfig.refreshMorphCanvas)
-end))
-
-remember(morphList.ChildRemoved:Connect(function()
-	task.defer(environment.CaelusLegacyNekoConfig.refreshMorphCanvas)
-end))
-
-remember(morphList:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
-	task.defer(environment.CaelusLegacyNekoConfig.refreshMorphCanvas)
-end))
-
 local function rememberFollow(connection)
 	table.insert(state.followConnections, connection)
 	return connection
@@ -1546,15 +1504,112 @@ for index, legacyName in ipairs(environment.CaelusLegacyNekoConfig.order) do
 	environment.CaelusLegacyNekoConfig.buttons[legacyName] = button
 end
 
-local initialCanvasScale = math.max(
-	1,
-	environment.CaelusLegacyNekoConfig.baseY
-		+ (#environment.CaelusLegacyNekoConfig.order
-			* environment.CaelusLegacyNekoConfig.stepY)
-		+ 0.15
+morphList.Active = true
+morphList.ScrollingEnabled = true
+morphList.ScrollingDirection = Enum.ScrollingDirection.Y
+morphList.AutomaticCanvasSize = Enum.AutomaticSize.None
+
+environment.CaelusLegacyNekoConfig.layoutMorphButtons = function()
+	if not (morphList and morphList.Parent) then
+		return
+	end
+
+	local orderedButtons = {}
+
+	for _, morphName in ipairs(MORPHS) do
+		local button = morphList:FindFirstChild(morphName)
+		if button and button:IsA("GuiButton") then
+			table.insert(orderedButtons, button)
+		end
+	end
+
+	if customAddButton and customAddButton.Parent == morphList then
+		table.insert(orderedButtons, customAddButton)
+	end
+
+	if customEditButton and customEditButton.Parent == morphList then
+		table.insert(orderedButtons, customEditButton)
+	end
+
+	for _, button in ipairs(state.presetButtons) do
+		if button and button.Parent == morphList then
+			table.insert(orderedButtons, button)
+		end
+	end
+
+	for _, legacyName in ipairs(environment.CaelusLegacyNekoConfig.order) do
+		local button = environment.CaelusLegacyNekoConfig.buttons[legacyName]
+		if button and button.Parent == morphList then
+			table.insert(orderedButtons, button)
+		end
+	end
+
+	local y = 8
+	local gap = 6
+	local fallbackHeight = math.max(
+		24,
+		math.floor((morphList.AbsoluteSize.Y * 0.07) + 0.5)
+	)
+
+	for _, button in ipairs(orderedButtons) do
+		local height = math.floor(button.AbsoluteSize.Y + 0.5)
+
+		if height < 8 then
+			height = math.floor(
+				(button.Size.Y.Scale * morphList.AbsoluteSize.Y)
+				+ button.Size.Y.Offset
+				+ 0.5
+			)
+		end
+
+		height = math.max(fallbackHeight, height)
+
+		button.Size = UDim2.new(
+			button.Size.X.Scale,
+			button.Size.X.Offset,
+			0,
+			height
+		)
+
+		button.Position = UDim2.new(
+			button.Position.X.Scale,
+			button.Position.X.Offset,
+			0,
+			y
+		)
+
+		y = y + height + gap
+	end
+
+	local canvasHeight = math.max(
+		morphList.AbsoluteSize.Y,
+		y + 16
+	)
+
+	morphList.CanvasSize = UDim2.fromOffset(0, canvasHeight)
+
+	local maxScroll = math.max(
+		0,
+		canvasHeight - morphList.AbsoluteSize.Y
+	)
+
+	if morphList.CanvasPosition.Y > maxScroll then
+		morphList.CanvasPosition = Vector2.new(
+			0,
+			maxScroll
+		)
+	end
+end
+
+task.defer(environment.CaelusLegacyNekoConfig.layoutMorphButtons)
+
+remember(
+	morphList:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
+		task.defer(
+			environment.CaelusLegacyNekoConfig.layoutMorphButtons
+		)
+	end)
 )
-morphList.CanvasSize = UDim2.new(0, 0, initialCanvasScale, 0)
-task.defer(environment.CaelusLegacyNekoConfig.refreshMorphCanvas)
 
 
 local customPanel = Instance.new("Frame")
@@ -1945,29 +2000,12 @@ local function refreshPresetButtons()
 		end))
 	end
 
-	local legacyStartY = savedStartY + (#presets * stepY)
-	environment.CaelusLegacyNekoConfig.baseY = legacyStartY
+	environment.CaelusLegacyNekoConfig.baseY =
+		savedStartY + (#presets * stepY)
 
-	for index, legacyName in ipairs(environment.CaelusLegacyNekoConfig.order) do
-		local button = environment.CaelusLegacyNekoConfig.buttons[legacyName]
-		if button and button.Parent then
-			button.Position = UDim2.new(
-				0.049261082,
-				0,
-				legacyStartY + ((index - 1) * stepY),
-				0
-			)
-		end
-	end
-
-	local neededScale = math.max(
-		1,
-		legacyStartY
-			+ (#environment.CaelusLegacyNekoConfig.order * stepY)
-			+ 0.15
+	task.defer(
+		environment.CaelusLegacyNekoConfig.layoutMorphButtons
 	)
-	morphList.CanvasSize = UDim2.new(0, 0, neededScale, 0)
-	task.defer(environment.CaelusLegacyNekoConfig.refreshMorphCanvas)
 end
 
 refreshPresetButtons()
