@@ -2465,7 +2465,7 @@ function environment.CaelusLegacyNekoConfig:loadRoot(name)
 			.. tostring(lastProblem)
 end
 
-function environment.CaelusLegacyNekoConfig:loadCustomController(
+function environment.CaelusLegacyNekoConfig:runCustomController(
 	name,
 	shadow
 )
@@ -2473,6 +2473,47 @@ function environment.CaelusLegacyNekoConfig:loadCustomController(
 
 	if not root then
 		return nil, problem
+	end
+
+	local mainModule =
+		root:IsA("ModuleScript")
+			and root
+		or root:FindFirstChild("MainModule", true)
+
+	if mainModule and mainModule:IsA("ModuleScript") then
+		local ok, moduleOrProblem = pcall(require, mainModule)
+
+		if ok and type(moduleOrProblem) == "table"
+			and type(moduleOrProblem.advneko) == "function"
+		then
+			local started, startProblem = pcall(
+				moduleOrProblem.advneko,
+				player
+			)
+
+			if started then
+				root.Name = "CaelusMelanieRuntime"
+				root.Parent = shadow
+
+				shadow:SetAttribute(
+					"CaelusCustomControllerMode",
+					"MainModule.advneko"
+				)
+
+				return root, nil
+			end
+
+			problem =
+				"MainModule.advneko failed: "
+				.. tostring(startProblem)
+		elseif not ok then
+			problem =
+				"MainModule require failed: "
+				.. tostring(moduleOrProblem)
+		else
+			problem =
+				"MainModule does not expose advneko(Plr)."
+		end
 	end
 
 	local function controllerScore(candidate)
@@ -2504,16 +2545,12 @@ function environment.CaelusLegacyNekoConfig:loadCustomController(
 		return score
 	end
 
-	local customRoot
 	local controller
+	local bestScore = -1
 
 	if root:IsA("LocalScript") then
-		customRoot = root
 		controller = root
 	else
-		customRoot = root
-		local bestScore = -1
-
 		for _, descendant in ipairs(root:GetDescendants()) do
 			local score = controllerScore(descendant)
 
@@ -2530,22 +2567,27 @@ function environment.CaelusLegacyNekoConfig:loadCustomController(
 		end)
 
 		return nil,
-			"Custom Neko asset has no runnable LocalScript controller."
+			tostring(problem or "No runnable custom controller found.")
 	end
 
-	if customRoot == controller then
+	if root == controller then
 		controller.Name = "CaelusNekoOriginalController"
 		controller.Parent = shadow
 	else
-		customRoot.Name = "CaelusCustomNekoRoot"
-		customRoot.Parent = shadow
+		root.Name = "CaelusCustomNekoRoot"
+		root.Parent = shadow
 	end
 
 	controller:SetAttribute("CaelusSessionActive", true)
 	controller:SetAttribute("CaelusStartError", nil)
 	controller:SetAttribute("CaelusCustomController", true)
 
-	return controller, nil
+	shadow:SetAttribute(
+		"CaelusCustomControllerMode",
+		"LocalScriptFallback"
+	)
+
+	return controller, problem
 end
 
 function environment.CaelusLegacyNekoConfig:replaceChild(targetParent, sourceParent, childName)
@@ -3969,7 +4011,7 @@ local function applyMorph(versionName, morphName)
 		local customProblem
 
 		controller, customProblem =
-			environment.CaelusLegacyNekoConfig:loadCustomController(
+			environment.CaelusLegacyNekoConfig:runCustomController(
 				morphName,
 				shadow
 			)
@@ -4069,8 +4111,11 @@ local function applyMorph(versionName, morphName)
 			return
 		end
 
-		local problem =
-			controller:GetAttribute("CaelusStartError")
+		local problem
+
+		pcall(function()
+			problem = controller:GetAttribute("CaelusStartError")
+		end)
 
 		if problem then
 			selectedText.Text =
@@ -4082,7 +4127,9 @@ local function applyMorph(versionName, morphName)
 			return
 		end
 
-		controller:SetAttribute("CaelusReady", true)
+		pcall(function()
+			controller:SetAttribute("CaelusReady", true)
+		end)
 	else
 		local deadline = os.clock() + 20
 
@@ -4598,31 +4645,6 @@ local following = false
 local targetPlayer
 local activeAnimation
 local followConnection
-local collisionState = {}
-
-local function setCharacterCollision(character, enabled)
-	for _, descendant in ipairs(character:GetDescendants()) do
-		if descendant:IsA("BasePart") then
-			if enabled then
-				local previous = collisionState[descendant]
-
-				if previous ~= nil then
-					descendant.CanCollide = previous
-				end
-			else
-				if collisionState[descendant] == nil then
-					collisionState[descendant] = descendant.CanCollide
-				end
-
-				descendant.CanCollide = false
-			end
-		end
-	end
-
-	if enabled then
-		table.clear(collisionState)
-	end
-end
 
 local function stopFollowing()
 	following = false
@@ -4639,16 +4661,11 @@ local function stopFollowing()
 	end
 
 	local character = LocalPlayer.Character
+	local humanoid =
+		character and character:FindFirstChildOfClass("Humanoid")
 
-	if character then
-		setCharacterCollision(character, true)
-
-		local root = character:FindFirstChild("HumanoidRootPart")
-
-		if root then
-			root.AssemblyLinearVelocity = Vector3.zero
-			root.AssemblyAngularVelocity = Vector3.zero
-		end
+	if humanoid then
+		humanoid:Move(Vector3.zero, false)
 	end
 end
 
@@ -4712,20 +4729,10 @@ local function startFollowing()
 	local character = LocalPlayer.Character
 	local humanoid =
 		character and character:FindFirstChildOfClass("Humanoid")
-	local root =
-		character and character:FindFirstChild("HumanoidRootPart")
 
-	if not character or not humanoid or not root then
+	if not humanoid or humanoid.Health <= 0 then
 		return false
 	end
-
-	if humanoid.Health <= 0 then
-		return false
-	end
-
-	setCharacterCollision(character, false)
-	root.AssemblyLinearVelocity = Vector3.zero
-	root.AssemblyAngularVelocity = Vector3.zero
 
 	followConnection = RunService.Heartbeat:Connect(function()
 		if not following then
@@ -4749,25 +4756,26 @@ local function startFollowing()
 			targetCharacter
 			and targetCharacter:FindFirstChild("HumanoidRootPart")
 
-		if not localRoot
-			or not localHumanoid
+		if not localHumanoid
 			or localHumanoid.Health <= 0
-			or not targetRoot
+			or not localRoot
 			or not targetHumanoid
 			or targetHumanoid.Health <= 0
+			or not targetRoot
 		then
 			stopFollowing()
 			return
 		end
 
-		localRoot.AssemblyLinearVelocity = Vector3.zero
-		localRoot.AssemblyAngularVelocity = Vector3.zero
+		local desired =
+			targetRoot.Position
+			- targetRoot.CFrame.LookVector * 4
 
-		local safePosition =
-			targetRoot.CFrame
-			* CFrame.new(0, 0, 4)
-
-		localRoot.CFrame = safePosition
+		if (localRoot.Position - desired).Magnitude > 2.5 then
+			localHumanoid:MoveTo(desired)
+		else
+			localHumanoid:Move(Vector3.zero, false)
+		end
 	end)
 
 	return true
@@ -4805,9 +4813,7 @@ ToggleButton.MouseButton1Click:Connect(function()
 end)
 
 LocalPlayer.CharacterAdded:Connect(function()
-	if following then
-		stopFollowing()
-	end
+	stopFollowing()
 end)
 ]=],
 	},
