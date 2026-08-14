@@ -4854,6 +4854,8 @@ loadstring(game:HttpGet(
 environment.CaelusPendalarNekoUI = {
 	Session = state,
 	Window = nil,
+	GuiRoot = nil,
+	BuildStarted = false,
 	VersionLabel = nil,
 	EditorStatus = nil,
 	EditorSkinColor = DEFAULT_WHITE_NEKO_SKIN,
@@ -5567,7 +5569,64 @@ function environment.CaelusPendalarNekoUI:SaveEditor()
 	self.EditorStatus.Text = "Saved : " .. tostring(result)
 end
 
+function environment.CaelusPendalarNekoUI:DestroyExistingWindow()
+	if self.GuiRoot and self.GuiRoot.Parent then
+		pcall(function()
+			self.GuiRoot:Destroy()
+		end)
+	end
+
+	self.GuiRoot = nil
+	self.Window = nil
+
+	for _, root in ipairs(self:GetGuiRoots()) do
+		for _, child in ipairs(root:GetChildren()) do
+			if child:IsA("ScreenGui") then
+				local normalized = string.lower(
+					tostring(child.Name or "")
+				)
+
+				if normalized:find("pendulum", 1, true)
+					or normalized:find("pendalar", 1, true)
+				then
+					pcall(function()
+						child:Destroy()
+					end)
+				end
+			end
+		end
+	end
+end
+
+function environment.CaelusPendalarNekoUI:FindCreatedGui(before)
+	for _, root in ipairs(self:GetGuiRoots()) do
+		for _, child in ipairs(root:GetChildren()) do
+			if child:IsA("ScreenGui") and not before[child] then
+				return child
+			end
+		end
+	end
+
+	return nil
+end
+
 function environment.CaelusPendalarNekoUI:Build()
+	if self.BuildStarted then
+		return true
+	end
+
+	self.BuildStarted = true
+	self:DestroyExistingWindow()
+
+	local guiBefore = {}
+
+	for _, root in ipairs(self:GetGuiRoots()) do
+		for _, child in ipairs(root:GetChildren()) do
+			if child:IsA("ScreenGui") then
+				guiBefore[child] = true
+			end
+		end
+	end
 	local flingOk, flingProblem = self:LoadOriginalTouchFling()
 
 	if not flingOk then
@@ -5622,6 +5681,9 @@ function environment.CaelusPendalarNekoUI:Build()
 	end
 
 	local window = library:New("Pendalar Hub")
+	task.wait()
+
+	self.GuiRoot = self:FindCreatedGui(guiBefore)
 	local nekosTab = window:NewTab("Nekos")
 	local settingsTab = window:NewTab("Settings")
 	local editorTab = window:NewTab("Neko Editor")
@@ -5832,6 +5894,10 @@ state.pendalarUiOk, state.pendalarUiProblem =
 	environment.CaelusPendalarNekoUI:Build()
 
 if not state.pendalarUiOk then
+	if environment.CaelusPendalarNekoUI then
+		environment.CaelusPendalarNekoUI.BuildStarted = false
+	end
+
 	warn(
 		"[Pendalar Hub] Embedded UI failed: "
 			.. tostring(state.pendalarUiProblem)
@@ -5917,6 +5983,8 @@ function state:Destroy()
 	if environment.CaelusPendalarNekoUI
 		and environment.CaelusPendalarNekoUI.Session == self
 	then
+		environment.CaelusPendalarNekoUI:DestroyExistingWindow()
+		environment.CaelusPendalarNekoUI.BuildStarted = false
 		environment.CaelusPendalarNekoUI = nil
 	end
 end
