@@ -5,6 +5,9 @@
 -- Repository: a65407112-boop/Neko-Script
 
 
+local BASE_URL =
+	"https://raw.githubusercontent.com/a65407112-boop/Neko-Script/main"
+
 if BASE_URL == "" then
 	error("[Caelus Neko 3.29] BASE_URL is empty.", 0)
 end
@@ -14,8 +17,6 @@ BASE_URL = BASE_URL:gsub("/+$", "")
 if not game:IsLoaded() then
 	game.Loaded:Wait()
 end
-
-local BASE_URL = "https://raw.githubusercontent.com/a65407112-boop/Neko-Script/main"
 
 
 local environment = (type(getgenv) == "function" and getgenv()) or _G
