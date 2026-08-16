@@ -14,7 +14,7 @@ local Debris = game:GetService("Debris")
 local HttpService = game:GetService("HttpService")
 
 local environment = (type(getgenv) == "function" and getgenv()) or _G
-local RUNTIME_VERSION = "3.32.2-single-pendalar-window"
+local RUNTIME_VERSION = "3.32.3-claw-speed-attack-fling"
 
 local function startupLog(message)
 	pcall(function()
@@ -483,6 +483,10 @@ local state = {
 	editingPresetName = nil,
 	editingPresetPath = nil,
 	customDraftUse3DPants = true,
+	originalClawRunSpeedEnabled = false,
+	clawsActive = false,
+	clawRunSpeed = 35.2,
+	clawBaseWalkSpeed = nil,
 	clothingGuard = {
 		props = {
 			Shirt = "ShirtTemplate",
@@ -2286,9 +2290,73 @@ keyGrid.FillDirectionMaxCells = 5
 keyGrid.SortOrder = Enum.SortOrder.LayoutOrder
 keyGrid.Parent = keyScroll
 
+function state:activeRealHumanoid()
+	local character = player.Character
+
+	if not character then
+		return nil
+	end
+
+	return character:FindFirstChildOfClass("Humanoid")
+end
+
+function state:restoreClawRunSpeed()
+	local humanoid = self:activeRealHumanoid()
+
+	if humanoid and self.clawBaseWalkSpeed ~= nil then
+		pcall(function()
+			humanoid.WalkSpeed = self.clawBaseWalkSpeed
+		end)
+	end
+
+	self.clawBaseWalkSpeed = nil
+end
+
+function state:refreshClawRunSpeed()
+	local humanoid = self:activeRealHumanoid()
+
+	if not humanoid then
+		return
+	end
+
+	if self.originalClawRunSpeedEnabled
+		and self.clawsActive
+		and self.activeMorph
+	then
+		if self.clawBaseWalkSpeed == nil then
+			self.clawBaseWalkSpeed = humanoid.WalkSpeed
+		end
+
+		pcall(function()
+			humanoid.WalkSpeed = self.clawRunSpeed
+		end)
+	else
+		self:restoreClawRunSpeed()
+	end
+end
+
+function state:toggleClawRunState()
+	if not self.activeMorph then
+		return
+	end
+
+	self.clawsActive = not self.clawsActive
+	self:refreshClawRunSpeed()
+end
+
 local function fireCommand(kind, value)
+	if kind == "key_down"
+		and string.lower(tostring(value or "")) == "f"
+	then
+		state:toggleClawRunState()
+	end
+
 	local command = state.command
-	if command and command.Parent and command:IsA("BindableEvent") then
+
+	if command
+		and command.Parent
+		and command:IsA("BindableEvent")
+	then
 		command:Fire(kind, value)
 	end
 end
@@ -2341,6 +2409,8 @@ end
 
 local function cleanupShadow()
 	state.sessionSerial = state.sessionSerial + 1
+	state:restoreClawRunSpeed()
+	state.clawsActive = false
 
 	if state.externalCustomRuntime
 		and state.externalCustomRuntime.Parent
@@ -4894,13 +4964,11 @@ environment.CaelusPendalarNekoUI = {
 	EditorSkinColor = DEFAULT_WHITE_NEKO_SKIN,
 	EditorUse3DPants = true,
 	EditorPreviousName = nil,
-	FlingLoaded = false,
-	FlingEnabled = false,
-	FlingToggleButton = nil,
-	FlingGui = nil,
-	FlingHideConnection = nil,
-	FlingSourceUrl =
-		"https://rawscripts.net/raw/Universal-Script-Touch-fling-script-22447",
+	AttackFlingEnabled = false,
+	AttackFlingBusy = false,
+	AttackFlingRange = 30,
+	AttackFlingDuration = 0.55,
+	AttackFlingSimulationConnection = nil,
 	Scripts = PENDALAR_SCRIPTS,
 	LibraryUrl =
 		"https://raw.githubusercontent.com/shidemuri/scripts/main/newuilib.lua",
@@ -5029,280 +5097,230 @@ function environment.CaelusPendalarNekoUI:GetGuiRoots()
 	return roots
 end
 
-function environment.CaelusPendalarNekoUI:CollectTopLevelGuis()
-	local result = {}
+function environment.CaelusPendalarNekoUI:SetAttackFling(enabled)
+	self.AttackFlingEnabled = enabled == true
 
-	for _, root in ipairs(self:GetGuiRoots()) do
-		for _, child in ipairs(root:GetChildren()) do
-			if child:IsA("LayerCollector") then
-				result[child] = true
-			end
-		end
-	end
-
-	return result
-end
-
-function environment.CaelusPendalarNekoUI:FindTouchFlingControls(
-	preferredGuis
-)
-	local function inspect(gui)
-		if not gui or not gui.Parent then
-			return nil, nil
-		end
-
-		local hasTouchFlingTitle = false
-		local toggleButton
-
-		for _, descendant in ipairs(gui:GetDescendants()) do
-			if descendant:IsA("TextLabel") then
-				local textValue = string.lower(
-					tostring(descendant.Text or "")
-				)
-
-				if textValue:find("touch fling", 1, true) then
-					hasTouchFlingTitle = true
-				end
-			elseif descendant:IsA("TextButton") then
-				local textValue = string.upper(
-					tostring(descendant.Text or "")
-				)
-
-				if textValue == "ON" or textValue == "OFF" then
-					toggleButton = descendant
-				end
-			end
-		end
-
-		if hasTouchFlingTitle and toggleButton then
-			return gui, toggleButton
-		end
-
-		return nil, nil
-	end
-
-	for _, gui in ipairs(preferredGuis or {}) do
-		local foundGui, button = inspect(gui)
-
-		if foundGui then
-			return foundGui, button
-		end
-	end
-
-	for _, root in ipairs(self:GetGuiRoots()) do
-		for _, child in ipairs(root:GetChildren()) do
-			if child:IsA("LayerCollector") then
-				local foundGui, button = inspect(child)
-
-				if foundGui then
-					return foundGui, button
-				end
-			end
-		end
-	end
-
-	return nil, nil
-end
-
-function environment.CaelusPendalarNekoUI:HideOriginalFlingGui()
-	local flingGui = self.FlingGui
-
-	if not flingGui or not flingGui.Parent then
-		return
-	end
-
-	pcall(function()
-		flingGui.Enabled = false
-	end)
-end
-
-function environment.CaelusPendalarNekoUI:GetOriginalFlingState()
-	local button = self.FlingToggleButton
-
-	if not button or not button.Parent then
-		return false
-	end
-
-	return string.upper(tostring(button.Text or "")) == "ON"
-end
-
-function environment.CaelusPendalarNekoUI:FireOriginalFlingButton()
-	local button = self.FlingToggleButton
-
-	if not button or not button.Parent then
-		return false, "Original Touch Fling toggle is missing."
-	end
-
-	if type(firesignal) == "function" then
-		local ok = pcall(function()
-			firesignal(button.MouseButton1Click)
-		end)
-
-		if ok then
-			return true
-		end
-	end
-
-	if type(getconnections) == "function" then
-		local ok, connections = pcall(
-			getconnections,
-			button.MouseButton1Click
-		)
-
-		if ok and type(connections) == "table" then
-			local fired = false
-
-			for _, connection in ipairs(connections) do
-				if type(connection.Fire) == "function" then
-					pcall(function()
-						connection:Fire()
-					end)
-					fired = true
-				elseif type(connection.Function) == "function" then
-					task.spawn(connection.Function)
-					fired = true
-				end
-			end
-
-			if fired then
-				return true
-			end
-		end
-	end
-
-	return false,
-		"Executor does not expose firesignal/getconnections."
-end
-
-function environment.CaelusPendalarNekoUI:LoadOriginalTouchFling()
-	if self.FlingLoaded
-		and self.FlingGui
-		and self.FlingGui.Parent
-		and self.FlingToggleButton
-		and self.FlingToggleButton.Parent
+	if self.AttackFlingEnabled
+		and not self.AttackFlingSimulationConnection
 	then
-		self:HideOriginalFlingGui()
-		return true
+		self.AttackFlingSimulationConnection =
+			RunService.Heartbeat:Connect(function()
+				pcall(function()
+					if type(sethiddenproperty) == "function" then
+						sethiddenproperty(
+							player,
+							"MaximumSimulationRadius",
+							math.huge
+						)
+						sethiddenproperty(
+							player,
+							"SimulationRadius",
+							math.huge
+						)
+					end
+
+					player.ReplicationFocus = workspace
+				end)
+			end)
+	elseif not self.AttackFlingEnabled
+		and self.AttackFlingSimulationConnection
+	then
+		self.AttackFlingSimulationConnection:Disconnect()
+		self.AttackFlingSimulationConnection = nil
 	end
-
-	local before = self:CollectTopLevelGuis()
-	local sourceText, fetchProblem =
-		self:Fetch(self.FlingSourceUrl)
-
-	if not sourceText then
-		return false,
-			"Touch Fling loader download failed: "
-				.. tostring(fetchProblem)
-	end
-
-	if type(loadstring) ~= "function" then
-		return false, "loadstring() is unavailable."
-	end
-
-	local chunk, compileProblem = loadstring(
-		sourceText,
-		"=PendalarOriginalTouchFling"
-	)
-
-	if not chunk then
-		return false,
-			"Touch Fling loader compile failed: "
-				.. tostring(compileProblem)
-	end
-
-	local ok, runtimeProblem = pcall(chunk)
-
-	if not ok then
-		return false,
-			"Touch Fling loader runtime failed: "
-				.. tostring(runtimeProblem)
-	end
-
-	local deadline = os.clock() + 4
-	local foundGui
-	local foundButton
-
-	repeat
-		task.wait(0.1)
-
-		local after = self:CollectTopLevelGuis()
-		local newGuis = {}
-
-		for gui in pairs(after) do
-			if not before[gui] then
-				table.insert(newGuis, gui)
-			end
-		end
-
-		foundGui, foundButton =
-			self:FindTouchFlingControls(newGuis)
-
-		if not foundGui then
-			foundGui, foundButton =
-				self:FindTouchFlingControls()
-		end
-	until foundGui or os.clock() >= deadline
-
-	if not foundGui or not foundButton then
-		return false,
-			"Original Touch Fling ran, but its Touch Fling/OFF GUI "
-				.. "could not be located."
-	end
-
-	self.FlingGui = foundGui
-	self.FlingToggleButton = foundButton
-	self.FlingLoaded = true
-	self.FlingEnabled = self:GetOriginalFlingState()
-
-	if self.FlingHideConnection then
-		self.FlingHideConnection:Disconnect()
-	end
-
-	self.FlingHideConnection =
-		game:GetService("RunService").Heartbeat:Connect(function()
-			self:HideOriginalFlingGui()
-		end)
-
-	self:HideOriginalFlingGui()
 
 	return true
 end
 
-function environment.CaelusPendalarNekoUI:SetOriginalTouchFling(
-	enabled
+function environment.CaelusPendalarNekoUI:TargetFromScreenPoint(
+	screenX,
+	screenY
 )
-	local loaded, loadProblem = self:LoadOriginalTouchFling()
+	local character = player.Character
+	local camera = workspace.CurrentCamera
 
-	if not loaded then
-		return false, loadProblem
+	if not character or not camera then
+		return nil
 	end
 
-	enabled = enabled == true
+	local root = character:FindFirstChild("HumanoidRootPart")
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
 
-	local actualState = self:GetOriginalFlingState()
-
-	if actualState == enabled then
-		self.FlingEnabled = actualState
-		self:HideOriginalFlingGui()
-		return true
+	if not root or not humanoid or humanoid.Health <= 0 then
+		return nil
 	end
 
-	local fired, fireProblem = self:FireOriginalFlingButton()
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.FilterDescendantsInstances = {
+		character,
+		state.shadow,
+	}
 
-	if not fired then
-		return false, fireProblem
+	local ray = camera:ViewportPointToRay(screenX, screenY)
+	local result = workspace:Raycast(
+		ray.Origin,
+		ray.Direction * 5000,
+		params
+	)
+
+	if not result then
+		return nil
 	end
 
-	task.wait(0.08)
+	local targetModel =
+		result.Instance:FindFirstAncestorOfClass("Model")
 
-	actualState = self:GetOriginalFlingState()
-	self.FlingEnabled = actualState
-	self:HideOriginalFlingGui()
-
-	if actualState ~= enabled then
-		return false,
-			"Original Touch Fling toggle did not change state."
+	if not targetModel then
+		return nil
 	end
+
+	local targetPlayer =
+		Players:GetPlayerFromCharacter(targetModel)
+
+	if not targetPlayer or targetPlayer == player then
+		return nil
+	end
+
+	local targetHumanoid =
+		targetModel:FindFirstChildOfClass("Humanoid")
+	local targetRoot =
+		targetModel:FindFirstChild("HumanoidRootPart")
+		or targetModel:FindFirstChild("Torso")
+		or targetModel:FindFirstChild("UpperTorso")
+
+	if not targetHumanoid
+		or targetHumanoid.Health <= 0
+		or not targetRoot
+		or not targetRoot:IsA("BasePart")
+	then
+		return nil
+	end
+
+	if (targetRoot.Position - root.Position).Magnitude
+		> self.AttackFlingRange
+	then
+		return nil
+	end
+
+	return targetModel, targetRoot
+end
+
+function environment.CaelusPendalarNekoUI:FlingAtScreenPoint(
+	screenX,
+	screenY
+)
+	if not self.AttackFlingEnabled
+		or self.AttackFlingBusy
+	then
+		return false
+	end
+
+	local targetModel, targetRoot =
+		self:TargetFromScreenPoint(screenX, screenY)
+
+	if not targetModel or not targetRoot then
+		return false
+	end
+
+	local character = player.Character
+	local humanoid =
+		character and character:FindFirstChildOfClass("Humanoid")
+	local root =
+		character and character:FindFirstChild("HumanoidRootPart")
+
+	if not character
+		or not humanoid
+		or humanoid.Health <= 0
+		or not root
+	then
+		return false
+	end
+
+	self.AttackFlingBusy = true
+
+	task.spawn(function()
+		local savedCFrame = root.CFrame
+		local savedLinear = root.AssemblyLinearVelocity
+		local savedAngular = root.AssemblyAngularVelocity
+		local savedAutoRotate = humanoid.AutoRotate
+		local collisionState = {}
+
+		for _, descendant in ipairs(character:GetDescendants()) do
+			if descendant:IsA("BasePart") then
+				collisionState[descendant] = descendant.CanCollide
+
+				if descendant ~= root then
+					descendant.CanCollide = false
+				end
+			end
+		end
+
+		root.CanCollide = true
+		humanoid.AutoRotate = false
+
+		local spin = Instance.new("BodyAngularVelocity")
+		spin.Name = "CaelusAttackFlingSpin"
+		spin.AngularVelocity = Vector3.new(0, 100000, 0)
+		spin.MaxTorque =
+			Vector3.new(math.huge, math.huge, math.huge)
+		spin.P = math.huge
+		spin.Parent = root
+
+		local started = os.clock()
+		local phase = 0
+
+		while self.AttackFlingEnabled
+			and targetModel.Parent
+			and targetRoot.Parent
+			and character.Parent
+			and humanoid.Health > 0
+			and os.clock() - started < self.AttackFlingDuration
+		do
+			phase = phase + 1
+
+			local offset
+
+			if phase % 4 == 0 then
+				offset = CFrame.new(1.1, 0, 0)
+			elseif phase % 4 == 1 then
+				offset = CFrame.new(-1.1, 0, 0)
+			elseif phase % 4 == 2 then
+				offset = CFrame.new(0, 0, 1.1)
+			else
+				offset = CFrame.new(0, 0, -1.1)
+			end
+
+			root.CFrame = targetRoot.CFrame * offset
+			root.AssemblyLinearVelocity = Vector3.zero
+			root.AssemblyAngularVelocity =
+				Vector3.new(0, 100000, 0)
+
+			RunService.Heartbeat:Wait()
+		end
+
+		pcall(function()
+			spin:Destroy()
+		end)
+
+		if root and root.Parent then
+			root.CFrame = savedCFrame
+			root.AssemblyLinearVelocity = savedLinear
+			root.AssemblyAngularVelocity = savedAngular
+		end
+
+		if humanoid and humanoid.Parent then
+			humanoid.AutoRotate = savedAutoRotate
+		end
+
+		for part, canCollide in pairs(collisionState) do
+			if part and part.Parent then
+				part.CanCollide = canCollide
+			end
+		end
+
+		self.AttackFlingBusy = false
+	end)
 
 	return true
 end
@@ -5670,14 +5688,6 @@ function environment.CaelusPendalarNekoUI:Build()
 
 	self.BuildStarted = true
 	self:DestroyExistingWindow()
-	local flingOk, flingProblem = self:LoadOriginalTouchFling()
-
-	if not flingOk then
-		warn(
-			"[Pendalar Touch Fling] "
-				.. tostring(flingProblem)
-		)
-	end
 
 	local sourceText, fetchProblem = self:Fetch(self.LibraryUrl)
 
@@ -5825,20 +5835,23 @@ function environment.CaelusPendalarNekoUI:Build()
 	end
 
 	settingsTab:NewBoolButton(
-		"Touch Fling",
-		"Original hidden Touch Fling script controlled by this toggle",
+		"Original Claw Run Speed",
+		"Use the original 35.2 run speed while F claws are active",
 		function(enabled)
-			local changed, problem =
-				self:SetOriginalTouchFling(enabled)
-
-			if not changed then
-				warn(
-					"[Pendalar Touch Fling] "
-						.. tostring(problem)
-				)
-			end
+			state.originalClawRunSpeedEnabled =
+				enabled == true
+			state:refreshClawRunSpeed()
 		end,
-		self.FlingEnabled
+		state.originalClawRunSpeedEnabled
+	)
+
+	settingsTab:NewBoolButton(
+		"Attack Fling",
+		"Fling the player under your cursor/tap during the main attack",
+		function(enabled)
+			self:SetAttackFling(enabled)
+		end,
+		self.AttackFlingEnabled
 	)
 
 
@@ -5965,7 +5978,7 @@ function environment.CaelusPendalarNekoUI:Build()
 	creditsTab:NewLabel("melanie070910")
 
 	window:SetMainTab(nekosTab)
-	window:SetFooter("Current Version : 3.32.2")
+	window:SetFooter("Current Version : 3.32.3")
 
 	self.Window = window
 
@@ -6037,15 +6050,55 @@ end
 -- A touch on open world space performs the original mouse attack.  UI taps,
 -- including the phone movement controls and key buttons, are ignored.
 remember(UserInputService.InputBegan:Connect(function(input, gameProcessed)
-	if gameProcessed or input.UserInputType ~= Enum.UserInputType.Touch then return end
-	if overInteractiveGui(input.Position) then return end
-	state.activeTouches[input] = true
-	fireCommand("mouse_down")
+	if gameProcessed then
+		return
+	end
+
+	local isTouch =
+		input.UserInputType == Enum.UserInputType.Touch
+	local isMouse =
+		input.UserInputType == Enum.UserInputType.MouseButton1
+
+	if not isTouch and not isMouse then
+		return
+	end
+
+	if overInteractiveGui(input.Position) then
+		return
+	end
+
+	local pendalarUI = state.pendalarUI
+
+	if type(pendalarUI) == "table"
+		and pendalarUI.AttackFlingEnabled
+	then
+		pendalarUI:FlingAtScreenPoint(
+			input.Position.X,
+			input.Position.Y
+		)
+	end
+
+	if isTouch then
+		state.activeTouches[input] = true
+		fireCommand("mouse_down")
+	end
 end))
 remember(UserInputService.InputEnded:Connect(function(input)
 	if state.activeTouches[input] then
 		state.activeTouches[input] = nil
 		fireCommand("mouse_up")
+	end
+end))
+
+remember(UserInputService.InputBegan:Connect(function(input, gameProcessed)
+	if gameProcessed then
+		return
+	end
+
+	if input.UserInputType == Enum.UserInputType.Keyboard
+		and input.KeyCode == Enum.KeyCode.F
+	then
+		state:toggleClawRunState()
 	end
 end))
 
@@ -6070,15 +6123,12 @@ function state:Destroy()
 		self.pendalarUI or environment.CaelusPendalarNekoUI
 
 	if type(pendalarUI) == "table" then
-		if pendalarUI.FlingEnabled then
-			pendalarUI:SetOriginalTouchFling(false)
-		end
-
-		if pendalarUI.FlingHideConnection then
-			pendalarUI.FlingHideConnection:Disconnect()
-			pendalarUI.FlingHideConnection = nil
-		end
+		pendalarUI:SetAttackFling(false)
+		pendalarUI.AttackFlingBusy = false
 	end
+
+	self:restoreClawRunSpeed()
+	self.clawsActive = false
 
 	local followRuntime = environment.CaelusR6FollowRuntime
 	if type(followRuntime) == "table"
@@ -6114,7 +6164,7 @@ selectedValue.Value = ""
 rebuildKeyPanel("V4")
 
 if type(environment.CaelusNekoBootStatus) == "function" then
-	environment.CaelusNekoBootStatus("Caelus Neko 3.32.2: ready")
+	environment.CaelusNekoBootStatus("Caelus Neko 3.32.3: ready")
 end
 task.delay(0.35, function()
 	local bootGui = environment.CaelusNekoBootGui
