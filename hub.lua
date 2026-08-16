@@ -14,7 +14,7 @@ local Debris = game:GetService("Debris")
 local HttpService = game:GetService("HttpService")
 
 local environment = (type(getgenv) == "function" and getgenv()) or _G
-local RUNTIME_VERSION = "3.32.4-claw-sync-fling-stable"
+local RUNTIME_VERSION = "3.32.5-neko-v5-original-legs"
 
 local function startupLog(message)
 	pcall(function()
@@ -1417,6 +1417,61 @@ local function retargetJoint(joint, driverToReal)
 	end
 end
 
+function state:mountNekoV5OriginalLegShells(
+	driver,
+	character,
+	wearRoot
+)
+	if self.activeLegacyNeko ~= "Neko V5" then
+		return
+	end
+
+	for _, legName in ipairs({"Left Leg", "Right Leg"}) do
+		local sourceLeg = driver:FindFirstChild(legName)
+		local realLeg = character:FindFirstChild(legName)
+
+		if sourceLeg
+			and sourceLeg:IsA("BasePart")
+			and realLeg
+			and realLeg:IsA("BasePart")
+		then
+			local shell = sourceLeg:Clone()
+			shell.Name =
+				"CaelusNekoV5Original"
+				.. legName:gsub("%s+", "")
+			shell:SetAttribute("CaelusDirectWear", true)
+
+			for _, descendant in ipairs(shell:GetDescendants()) do
+				if descendant:IsA("JointInstance")
+					or descendant:IsA("WeldConstraint")
+					or descendant:IsA("Script")
+					or descendant:IsA("LocalScript")
+				then
+					descendant:Destroy()
+				end
+			end
+
+			shell.Anchored = false
+			shell.CFrame = realLeg.CFrame
+			makePartNonPhysical(shell, true)
+
+			pcall(function()
+				shell.LocalTransparencyModifier = 0
+			end)
+
+			shell.Parent = wearRoot
+
+			local weld = Instance.new("WeldConstraint")
+			weld.Name = "CaelusNekoV5LegWeld"
+			weld.Part0 = realLeg
+			weld.Part1 = shell
+			weld.Parent = shell
+
+			table.insert(self.directWearInstances, shell)
+		end
+	end
+end
+
 local function mountDirectWear(driver, character, humanoid, realRoot)
 	if humanoid.RigType ~= Enum.HumanoidRigType.R6 then
 		return false, "Direct Wear only supports R6. Switch the game character to R6 first."
@@ -1446,6 +1501,12 @@ local function mountDirectWear(driver, character, humanoid, realRoot)
 	wearRoot:SetAttribute("CaelusDirectWear", true)
 	wearRoot.Parent = character
 	state.wearRoot = wearRoot
+
+	state:mountNekoV5OriginalLegShells(
+		driver,
+		character,
+		wearRoot
+	)
 
 	local realTorso = character:FindFirstChild("Torso")
 	for _, modelName in ipairs({"CaelusLowerBelt", "CaelusUpperScarf"}) do
@@ -6046,7 +6107,7 @@ function environment.CaelusPendalarNekoUI:Build()
 	creditsTab:NewLabel("melanie070910")
 
 	window:SetMainTab(nekosTab)
-	window:SetFooter("Current Version : 3.32.4")
+	window:SetFooter("Current Version : 3.32.5")
 
 	self.Window = window
 
@@ -6220,7 +6281,7 @@ selectedValue.Value = ""
 rebuildKeyPanel("V4")
 
 if type(environment.CaelusNekoBootStatus) == "function" then
-	environment.CaelusNekoBootStatus("Caelus Neko 3.32.4: ready")
+	environment.CaelusNekoBootStatus("Caelus Neko 3.32.5: ready")
 end
 task.delay(0.35, function()
 	local bootGui = environment.CaelusNekoBootGui
