@@ -14,7 +14,7 @@ local Debris = game:GetService("Debris")
 local HttpService = game:GetService("HttpService")
 
 local environment = (type(getgenv) == "function" and getgenv()) or _G
-local RUNTIME_VERSION = "3.32.3-claw-speed-attack-fling"
+local RUNTIME_VERSION = "3.32.4-claw-sync-fling-stable"
 
 local function startupLog(message)
 	pcall(function()
@@ -2335,22 +2335,22 @@ function state:refreshClawRunSpeed()
 	end
 end
 
-function state:toggleClawRunState()
-	if not self.activeMorph then
+function state:syncClawRunStateFromController()
+	local controller = self.controller
+
+	if not controller or not controller.Parent then
+		self.clawsActive = false
+		self:refreshClawRunSpeed()
 		return
 	end
 
-	self.clawsActive = not self.clawsActive
+	self.clawsActive =
+		controller:GetAttribute("CaelusAggressive") == true
+
 	self:refreshClawRunSpeed()
 end
 
 local function fireCommand(kind, value)
-	if kind == "key_down"
-		and string.lower(tostring(value or "")) == "f"
-	then
-		state:toggleClawRunState()
-	end
-
 	local command = state.command
 
 	if command
@@ -2762,6 +2762,16 @@ local function isolatedChunk(targetScript)
 		source = source:gsub(
 			'if h ~= nil and hit%.Parent ~= Character and hit%.Parent:FindFirstChild%("Torso"%) or hit%.Parent:FindFirstChild%("UpperTorso"%) ~= nil then',
 			'if h ~= nil and hit.Parent ~= Character and hit.Parent ~= DriverCharacter and (hit.Parent:FindFirstChild("Torso") or hit.Parent:FindFirstChild("UpperTorso")) then'
+		)
+
+		source = source:gsub(
+			"agresive%s*=%s*true",
+			'agresive = true; pcall(function() script:SetAttribute("CaelusAggressive", true) end)'
+		)
+
+		source = source:gsub(
+			"agresive%s*=%s*false",
+			'agresive = false; pcall(function() script:SetAttribute("CaelusAggressive", false) end)'
 		)
 	end
 
@@ -4409,6 +4419,24 @@ local function applyMorph(versionName, morphName)
 
 	state.controller = controller
 
+	if controller
+		and controller.Parent
+		and controller:IsA("LocalScript")
+	then
+		state.clawsActive =
+			controller:GetAttribute("CaelusAggressive") == true
+
+		rememberFollow(
+			controller:GetAttributeChangedSignal(
+				"CaelusAggressive"
+			):Connect(function()
+				if state.controller == controller then
+					state:syncClawRunStateFromController()
+				end
+			end)
+		)
+	end
+
 	if legacyConfig and not legacyConfig.customController then
 		local legacyReady, legacyProblem =
 			environment.CaelusLegacyNekoConfig:patchController(
@@ -4967,7 +4995,7 @@ environment.CaelusPendalarNekoUI = {
 	AttackFlingEnabled = false,
 	AttackFlingBusy = false,
 	AttackFlingRange = 30,
-	AttackFlingDuration = 0.55,
+	AttackFlingDuration = 0.42,
 	AttackFlingSimulationConnection = nil,
 	Scripts = PENDALAR_SCRIPTS,
 	LibraryUrl =
@@ -5259,9 +5287,17 @@ function environment.CaelusPendalarNekoUI:FlingAtScreenPoint(
 		root.CanCollide = true
 		humanoid.AutoRotate = false
 
+		local stabilizer = Instance.new("BodyVelocity")
+		stabilizer.Name = "CaelusAttackFlingStabilizer"
+		stabilizer.Velocity = Vector3.zero
+		stabilizer.MaxForce =
+			Vector3.new(1e9, 1e9, 1e9)
+		stabilizer.P = 1e5
+		stabilizer.Parent = root
+
 		local spin = Instance.new("BodyAngularVelocity")
 		spin.Name = "CaelusAttackFlingSpin"
-		spin.AngularVelocity = Vector3.new(0, 100000, 0)
+		spin.AngularVelocity = Vector3.new(0, 65000, 0)
 		spin.MaxTorque =
 			Vector3.new(math.huge, math.huge, math.huge)
 		spin.P = math.huge
@@ -5282,19 +5318,19 @@ function environment.CaelusPendalarNekoUI:FlingAtScreenPoint(
 			local offset
 
 			if phase % 4 == 0 then
-				offset = CFrame.new(1.1, 0, 0)
+				offset = CFrame.new(0.45, 0, 0)
 			elseif phase % 4 == 1 then
-				offset = CFrame.new(-1.1, 0, 0)
+				offset = CFrame.new(-0.45, 0, 0)
 			elseif phase % 4 == 2 then
-				offset = CFrame.new(0, 0, 1.1)
+				offset = CFrame.new(0, 0, 0.45)
 			else
-				offset = CFrame.new(0, 0, -1.1)
+				offset = CFrame.new(0, 0, -0.45)
 			end
 
 			root.CFrame = targetRoot.CFrame * offset
 			root.AssemblyLinearVelocity = Vector3.zero
 			root.AssemblyAngularVelocity =
-				Vector3.new(0, 100000, 0)
+				Vector3.new(0, 65000, 0)
 
 			RunService.Heartbeat:Wait()
 		end
@@ -5303,8 +5339,40 @@ function environment.CaelusPendalarNekoUI:FlingAtScreenPoint(
 			spin:Destroy()
 		end)
 
+		pcall(function()
+			stabilizer:Destroy()
+		end)
+
 		if root and root.Parent then
-			root.CFrame = savedCFrame
+			local away =
+				savedCFrame.Position - targetRoot.Position
+
+			if away.Magnitude < 0.1 then
+				away = -targetRoot.CFrame.LookVector
+			else
+				away = away.Unit
+			end
+
+			local safePosition =
+				savedCFrame.Position + away * 2.5
+
+			root.CFrame =
+				CFrame.new(safePosition)
+				* savedCFrame.Rotation
+
+			root.AssemblyLinearVelocity = Vector3.zero
+			root.AssemblyAngularVelocity = Vector3.zero
+
+			local stableUntil = os.clock() + 0.2
+
+			while root.Parent
+				and os.clock() < stableUntil
+			do
+				root.AssemblyLinearVelocity = Vector3.zero
+				root.AssemblyAngularVelocity = Vector3.zero
+				RunService.Heartbeat:Wait()
+			end
+
 			root.AssemblyLinearVelocity = savedLinear
 			root.AssemblyAngularVelocity = savedAngular
 		end
@@ -5978,7 +6046,7 @@ function environment.CaelusPendalarNekoUI:Build()
 	creditsTab:NewLabel("melanie070910")
 
 	window:SetMainTab(nekosTab)
-	window:SetFooter("Current Version : 3.32.3")
+	window:SetFooter("Current Version : 3.32.4")
 
 	self.Window = window
 
@@ -6090,18 +6158,6 @@ remember(UserInputService.InputEnded:Connect(function(input)
 	end
 end))
 
-remember(UserInputService.InputBegan:Connect(function(input, gameProcessed)
-	if gameProcessed then
-		return
-	end
-
-	if input.UserInputType == Enum.UserInputType.Keyboard
-		and input.KeyCode == Enum.KeyCode.F
-	then
-		state:toggleClawRunState()
-	end
-end))
-
 remember(player.CharacterAdded:Connect(function(character)
 	local morphName = state.activeMorph or state.selectedMorph
 	local versionName = state.activeVersion or state.selectedVersion
@@ -6164,7 +6220,7 @@ selectedValue.Value = ""
 rebuildKeyPanel("V4")
 
 if type(environment.CaelusNekoBootStatus) == "function" then
-	environment.CaelusNekoBootStatus("Caelus Neko 3.32.3: ready")
+	environment.CaelusNekoBootStatus("Caelus Neko 3.32.4: ready")
 end
 task.delay(0.35, function()
 	local bootGui = environment.CaelusNekoBootGui
