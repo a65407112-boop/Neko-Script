@@ -14,7 +14,7 @@ local Debris = game:GetService("Debris")
 local HttpService = game:GetService("HttpService")
 
 local environment = (type(getgenv) == "function" and getgenv()) or _G
-local RUNTIME_VERSION = "3.32.6-melanie-thicker-legs"
+local RUNTIME_VERSION = "3.32.7-fe-toggle-hard-ui"
 
 local function startupLog(message)
 	pcall(function()
@@ -333,10 +333,6 @@ environment.CaelusLegacyNekoConfig = {
 			display = "Neko V5",
 			customController = true,
 			preserveEverything = true,
-			legMeshes = {
-				["Left Leg"] = "MelanieLeftLeg.mesh",
-				["Right Leg"] = "MelanieRightLeg.mesh",
-			},
 			keys = {"F", "R", "Z", "X", "C", "V", "Y", "T", "P", "0", "M", "N"},
 		},
 		["Noob Neko"] = {file = "NoobNeko.rbxm", display = "Noob Neko", skinColor = Color3.fromRGB(245, 205, 48), accentColor = Color3.fromRGB(13, 105, 172)},
@@ -488,6 +484,11 @@ local state = {
 	editingPresetPath = nil,
 	customDraftUse3DPants = true,
 	originalClawRunSpeedEnabled = false,
+	feAnimationsEnabled = false,
+	feAnimationConnections = {},
+	feAnimationTracks = {},
+	feSourceAnimator = nil,
+	feTargetAnimator = nil,
 	clawsActive = false,
 	clawRunSpeed = 35.2,
 	clawBaseWalkSpeed = nil,
@@ -1114,7 +1115,11 @@ local function restoreDirectWear()
 	for _, pair in ipairs(state.posePairs) do
 		local motor = pair.motor
 		if motor and motor.Parent then
-			pcall(function() motor.Transform = pair.originalTransform or CFrame.new() end)
+			pcall(function()
+				motor.C0 = pair.baseC0
+				motor.C1 = pair.baseC1
+				motor.Transform = pair.originalTransform or CFrame.new()
+			end)
 		end
 	end
 	table.clear(state.posePairs)
@@ -1285,6 +1290,15 @@ local function setupDirectPose(driver, character)
 		local animationPlayedOk, animationPlayedConnection = pcall(function()
 			return animator.AnimationPlayed:Connect(function(track)
 				if state.realHumanoid ~= humanoid then return end
+
+				-- FE Animation mirrors are deliberately played on the real character's
+				-- Animator.  Do not let the Direct Wear animation blocker kill them.
+				if state.feAnimationsEnabled
+					and track:GetAttribute("CaelusFEAnimationMirror") == true
+				then
+					return
+				end
+
 				pcall(function() track:Stop(0) end)
 			end)
 		end)
@@ -1313,13 +1327,240 @@ local function syncDirectPose()
 				* driverJoint.C1:Inverse()
 
 			pcall(function()
-				motor.Transform =
-					pair.baseC0:Inverse()
-					* desiredRelative
-					* pair.baseC1
+				if state.feAnimationsEnabled then
+					-- Motor6D.Transform is explicitly non-replicated.  FE mode encodes
+					-- the same procedural pose into the live R6 joint's C0 instead,
+					-- while keeping C1 at its original value.  This also covers the
+					-- old Neko controllers that animate Weld.C0 rather than tracks.
+					motor.Transform = CFrame.new()
+					motor.C1 = pair.baseC1
+					motor.C0 = desiredRelative * pair.baseC1
+				else
+					-- Returning from FE mode must restore the original joint basis
+					-- before applying the normal client-only Transform mirror.
+					motor.C0 = pair.baseC0
+					motor.C1 = pair.baseC1
+					motor.Transform =
+						pair.baseC0:Inverse()
+						* desiredRelative
+						* pair.baseC1
+				end
 			end)
 		end
 	end
+end
+
+function state:stopFEAnimationMirrors()
+	for _, connection in ipairs(self.feAnimationConnections) do
+		pcall(function() connection:Disconnect() end)
+	end
+	table.clear(self.feAnimationConnections)
+
+	for sourceTrack, targetTrack in pairs(self.feAnimationTracks) do
+		if targetTrack then
+			pcall(function() targetTrack:Stop(0.08) end)
+			pcall(function() targetTrack:Destroy() end)
+		end
+		self.feAnimationTracks[sourceTrack] = nil
+	end
+
+	self.feSourceAnimator = nil
+	self.feTargetAnimator = nil
+end
+
+function state:mirrorFEAnimationTrack(sourceTrack)
+	if not self.feAnimationsEnabled
+		or not sourceTrack
+		or not self.feTargetAnimator
+		or not self.feTargetAnimator.Parent
+	then
+		return nil
+	end
+
+	if self.feAnimationTracks[sourceTrack] then
+		return self.feAnimationTracks[sourceTrack]
+	end
+
+	local animationId = nil
+	local sourceAnimation = nil
+	pcall(function() sourceAnimation = sourceTrack.Animation end)
+	if sourceAnimation then
+		pcall(function() animationId = sourceAnimation.AnimationId end)
+	end
+
+	if type(animationId) ~= "string" or animationId == "" then
+		return nil
+	end
+
+	local animation = Instance.new("Animation")
+	animation.Name = "CaelusFEAnimation"
+	animation.AnimationId = animationId
+
+	local ok, targetTrack = pcall(function()
+		return self.feTargetAnimator:LoadAnimation(animation)
+	end)
+	animation:Destroy()
+
+	if not ok or not targetTrack then
+		return nil
+	end
+
+	targetTrack:SetAttribute("CaelusFEAnimationMirror", true)
+	self.feAnimationTracks[sourceTrack] = targetTrack
+
+	pcall(function() targetTrack.Priority = sourceTrack.Priority end)
+	pcall(function() targetTrack.Looped = sourceTrack.Looped end)
+
+	local sourceSpeed = 1
+	local sourceWeight = 1
+	pcall(function() sourceSpeed = sourceTrack.Speed end)
+	pcall(function() sourceWeight = math.max(sourceTrack.WeightCurrent, 0.001) end)
+
+	pcall(function()
+		targetTrack:Play(0.05, sourceWeight, sourceSpeed)
+	end)
+
+	pcall(function()
+		if sourceTrack.TimePosition > 0 then
+			targetTrack.TimePosition = sourceTrack.TimePosition
+		end
+	end)
+
+	local stoppedConnection
+	local stoppedOk, stoppedResult = pcall(function()
+		return sourceTrack.Stopped:Connect(function()
+			local mirror = self.feAnimationTracks[sourceTrack]
+			self.feAnimationTracks[sourceTrack] = nil
+			if mirror then
+				pcall(function() mirror:Stop(0.08) end)
+				pcall(function() mirror:Destroy() end)
+			end
+			if stoppedConnection then
+				pcall(function() stoppedConnection:Disconnect() end)
+			end
+		end)
+	end)
+	if stoppedOk and stoppedResult then
+		stoppedConnection = stoppedResult
+		table.insert(self.feAnimationConnections, stoppedConnection)
+	end
+
+	return targetTrack
+end
+
+function state:refreshFEAnimationMirroring()
+	self:stopFEAnimationMirrors()
+	if not self.feAnimationsEnabled then
+		return false
+	end
+
+	local driver = self.shadow
+	local character = self.realCharacter or player.Character
+	local realHumanoid = self.realHumanoid
+		or (character and character:FindFirstChildOfClass("Humanoid"))
+	if not (driver and driver.Parent and character and realHumanoid) then
+		return false
+	end
+
+	-- Only use the Animator that already belongs to the real character.  An
+	-- Animator created only on this client cannot provide genuine replication.
+	local targetAnimator = realHumanoid:FindFirstChildOfClass("Animator")
+	if not targetAnimator then
+		startupLog("FE Animations unavailable: real character has no Animator.")
+		return false
+	end
+
+	local sourceHumanoid = driver:FindFirstChild("NekoHumanoid")
+	if not (sourceHumanoid and sourceHumanoid:IsA("Humanoid")) then
+		sourceHumanoid = driver:FindFirstChildOfClass("Humanoid")
+	end
+	if not sourceHumanoid then
+		return false
+	end
+
+	local sourceAnimator = sourceHumanoid:FindFirstChildOfClass("Animator")
+	if not sourceAnimator then
+		startupLog(
+			"FE Animations enabled, but this Neko currently has no AnimationTrack Animator; "
+				.. "procedural Weld/Motor poses remain local."
+		)
+		return false
+	end
+
+	self.feSourceAnimator = sourceAnimator
+	self.feTargetAnimator = targetAnimator
+
+	local playedOk, playedConnection = pcall(function()
+		return sourceAnimator.AnimationPlayed:Connect(function(track)
+			if self.feAnimationsEnabled
+				and self.feSourceAnimator == sourceAnimator
+			then
+				self:mirrorFEAnimationTrack(track)
+			end
+		end)
+	end)
+	if playedOk and playedConnection then
+		table.insert(self.feAnimationConnections, playedConnection)
+	end
+
+	for _, track in ipairs(sourceAnimator:GetPlayingAnimationTracks()) do
+		self:mirrorFEAnimationTrack(track)
+	end
+
+	local accumulated = 0
+	local syncConnection = RunService.Heartbeat:Connect(function(deltaTime)
+		if not self.feAnimationsEnabled
+			or self.feSourceAnimator ~= sourceAnimator
+			or not sourceAnimator.Parent
+			or not targetAnimator.Parent
+		then
+			return
+		end
+
+		accumulated = accumulated + deltaTime
+		if accumulated < 0.10 then
+			return
+		end
+		accumulated = 0
+
+		for sourceTrack, targetTrack in pairs(self.feAnimationTracks) do
+			if not sourceTrack or not targetTrack then
+				self.feAnimationTracks[sourceTrack] = nil
+			else
+				local playing = false
+				pcall(function() playing = sourceTrack.IsPlaying end)
+				if not playing then
+					self.feAnimationTracks[sourceTrack] = nil
+					pcall(function() targetTrack:Stop(0.08) end)
+					pcall(function() targetTrack:Destroy() end)
+				else
+					pcall(function() targetTrack.Priority = sourceTrack.Priority end)
+					pcall(function() targetTrack.Looped = sourceTrack.Looped end)
+					pcall(function() targetTrack:AdjustSpeed(sourceTrack.Speed) end)
+					pcall(function()
+						targetTrack:AdjustWeight(
+							math.max(sourceTrack.WeightCurrent, 0.001),
+							0.08
+						)
+					end)
+					pcall(function()
+						if math.abs(targetTrack.TimePosition - sourceTrack.TimePosition) > 0.30 then
+							targetTrack.TimePosition = sourceTrack.TimePosition
+						end
+					end)
+				end
+			end
+		end
+	end)
+	table.insert(self.feAnimationConnections, syncConnection)
+
+	startupLog("FE AnimationTrack mirror active for " .. tostring(self.activeLegacyNeko or self.activeMorph or "Neko"))
+	return true
+end
+
+function state:setFEAnimations(enabled)
+	self.feAnimationsEnabled = enabled == true
+	self:refreshFEAnimationMirroring()
 end
 
 local function enforceDirectWear()
@@ -1430,98 +1671,48 @@ function state:mountNekoV5OriginalLegShells(
 		return
 	end
 
-	local config = environment.CaelusLegacyNekoConfig.variants["Neko V5"]
-	local legMeshes = config and config.legMeshes
-	local runtime = environment.CaelusRemoteAssetRuntime
-
-	-- Melanie's model itself now points at the two thicker local leg meshes.
-	-- When the remote asset runtime is active, build an equivalent FileMesh shell
-	-- from its resolved URI. SpecialMesh.MeshId can be assigned at runtime, while
-	-- MeshPart.MeshId cannot, so this keeps remote/executor installs working too.
 	for _, legName in ipairs({"Left Leg", "Right Leg"}) do
 		local sourceLeg = driver:FindFirstChild(legName)
 		local realLeg = character:FindFirstChild(legName)
-		local sourceVisual = sourceLeg and sourceLeg:FindFirstChild(legName)
-		local fileName = legMeshes and legMeshes[legName]
-		local resolvedUri = nil
-
-		if fileName
-		and type(runtime) == "table"
-		and type(runtime.getAssetUri) == "function" then
-			local ok, resolved = pcall(
-				runtime.getAssetUri,
-				runtime,
-				fileName
-			)
-			if ok and type(resolved) == "string" and resolved ~= "" then
-				resolvedUri = resolved
-			end
-		end
 
 		if sourceLeg
-		and sourceLeg:IsA("BasePart")
-		and realLeg
-		and realLeg:IsA("BasePart")
-		and sourceVisual
-		and sourceVisual:IsA("MeshPart")
-		and resolvedUri then
-			local relative = sourceLeg.CFrame:ToObjectSpace(sourceVisual.CFrame)
-			local shell = Instance.new("Part")
-			shell.Name = "CaelusNekoV5Thicker" .. legName:gsub("%s+", "")
+			and sourceLeg:IsA("BasePart")
+			and realLeg
+			and realLeg:IsA("BasePart")
+		then
+			local shell = sourceLeg:Clone()
+			shell.Name =
+				"CaelusNekoV5Original"
+				.. legName:gsub("%s+", "")
 			shell:SetAttribute("CaelusDirectWear", true)
-			shell:SetAttribute("CaelusNekoV5CustomLeg", true)
-			shell.Size = sourceVisual.Size
-			shell.CFrame = realLeg.CFrame * relative
-			shell.Color = sourceVisual.Color
-			shell.Material = sourceVisual.Material
-			shell.Reflectance = sourceVisual.Reflectance
-			shell.Transparency = sourceVisual.Transparency
-			shell.CastShadow = sourceVisual.CastShadow
+
+			for _, descendant in ipairs(shell:GetDescendants()) do
+				if descendant:IsA("JointInstance")
+					or descendant:IsA("WeldConstraint")
+					or descendant:IsA("Script")
+					or descendant:IsA("LocalScript")
+				then
+					descendant:Destroy()
+				end
+			end
+
 			shell.Anchored = false
+			shell.CFrame = realLeg.CFrame
 			makePartNonPhysical(shell, true)
 
-			local mesh = Instance.new("SpecialMesh")
-			mesh.Name = "MelanieThickerLegMesh"
-			mesh.MeshType = Enum.MeshType.FileMesh
-			mesh.Scale = Vector3.new(1, 1, 1)
-			mesh.Offset = Vector3.zero
 			pcall(function()
-				mesh.TextureId = sourceVisual.TextureID
+				shell.LocalTransparencyModifier = 0
 			end)
 
-			local meshAssigned = pcall(function()
-				mesh.MeshId = resolvedUri
-			end)
+			shell.Parent = wearRoot
 
-			if meshAssigned then
-				mesh.Parent = shell
-				shell.Parent = wearRoot
+			local weld = Instance.new("WeldConstraint")
+			weld.Name = "CaelusNekoV5LegWeld"
+			weld.Part0 = realLeg
+			weld.Part1 = shell
+			weld.Parent = shell
 
-				local weld = Instance.new("WeldConstraint")
-				weld.Name = "CaelusNekoV5ThickerLegWeld"
-				weld.Part0 = realLeg
-				weld.Part1 = shell
-				weld.Parent = shell
-
-				-- Keep the original MeshPart as the invisible weld anchor for the
-				-- sock/decal assembly. This preserves Melanie's original clothing.
-				sourceVisual.Transparency = 1
-				sourceVisual:SetAttribute("CaelusNekoV5BodyMeshReplaced", true)
-
-				table.insert(self.directWearInstances, shell)
-				startupLog(
-					"Mounted Melanie thicker "
-						.. legName
-						.. " from "
-						.. tostring(fileName)
-				)
-			else
-				shell:Destroy()
-				startupLog(
-					"Could not assign Melanie custom mesh for "
-						.. legName
-				)
-			end
+			table.insert(self.directWearInstances, shell)
 		end
 	end
 end
@@ -1646,6 +1837,7 @@ local function mountDirectWear(driver, character, humanoid, realRoot)
 
 	syncDirectPose()
 	enforceDirectWear()
+	state:refreshFEAnimationMirroring()
 	return true, nil
 end
 
@@ -2524,6 +2716,7 @@ end
 
 local function cleanupShadow()
 	state.sessionSerial = state.sessionSerial + 1
+	state:stopFEAnimationMirrors()
 	state:restoreClawRunSpeed()
 	state.clawsActive = false
 
@@ -5971,6 +6164,70 @@ function environment.CaelusPendalarNekoUI:Build()
 
 	self.ScriptsTab = scriptsTab
 
+	-- FE Animations uses a direct Settings row instead of Pendalar's
+	-- NewBoolButton. This guarantees the toggle is visible on mobile.
+	do
+		local settingsScroll =
+			settingsTab.Tab:FindFirstChildOfClass("ScrollingFrame")
+
+		if settingsScroll then
+			local feButton = Instance.new("TextButton")
+			feButton.Name = "FE Animations"
+			feButton.LayoutOrder = -1000
+			feButton.Size = UDim2.new(0, 385, 0, 39)
+			feButton.BackgroundColor3 = Color3.fromRGB(194, 73, 115)
+			feButton.BorderSizePixel = 0
+			feButton.AutoButtonColor = false
+			feButton.Font = Enum.Font.Roboto
+			feButton.Text = "FE Animations"
+			feButton.TextColor3 = Color3.new(1, 1, 1)
+			feButton.TextSize = 17
+			feButton.Parent = settingsScroll
+
+			local feCorner = Instance.new("UICorner")
+			feCorner.CornerRadius = UDim.new(0, 5)
+			feCorner.Parent = feButton
+
+			local slider = Instance.new("Frame")
+			slider.Name = "slider"
+			slider.Size = UDim2.fromOffset(25, 10)
+			slider.Position = UDim2.new(1, -40, 0.5, -5)
+			slider.BorderSizePixel = 0
+			slider.Parent = feButton
+
+			local sliderCorner = Instance.new("UICorner")
+			sliderCorner.CornerRadius = UDim.new(0, 5)
+			sliderCorner.Parent = slider
+
+			local knob = Instance.new("Frame")
+			knob.Name = "knob"
+			knob.Size = UDim2.fromOffset(15, 15)
+			knob.BorderSizePixel = 0
+			knob.Parent = slider
+
+			local knobCorner = Instance.new("UICorner")
+			knobCorner.CornerRadius = UDim.new(1, 0)
+			knobCorner.Parent = knob
+
+			local function refreshToggleVisual()
+				if state.feAnimationsEnabled then
+					slider.BackgroundColor3 = Color3.fromRGB(0, 240, 0)
+					knob.Position = UDim2.new(0, 15, 0, -3)
+				else
+					slider.BackgroundColor3 = Color3.fromRGB(200, 0, 0)
+					knob.Position = UDim2.new(0, -5, 0, -3)
+				end
+			end
+
+			refreshToggleVisual()
+
+			feButton.MouseButton1Click:Connect(function()
+				state:setFEAnimations(not state.feAnimationsEnabled)
+				refreshToggleVisual()
+			end)
+		end
+	end
+
 	nekosTab:NewSearchBar()
 
 	for _, morphName in ipairs(environment.CaelusNekoAPI.Morphs) do
@@ -6161,7 +6418,7 @@ function environment.CaelusPendalarNekoUI:Build()
 	creditsTab:NewLabel("melanie070910")
 
 	window:SetMainTab(nekosTab)
-	window:SetFooter("Current Version : 3.32.5")
+	window:SetFooter("Current Version : 3.32.7")
 
 	self.Window = window
 
