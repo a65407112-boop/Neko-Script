@@ -14,7 +14,7 @@ local Debris = game:GetService("Debris")
 local HttpService = game:GetService("HttpService")
 
 local environment = (type(getgenv) == "function" and getgenv()) or _G
-local RUNTIME_VERSION = "3.32.5-neko-v5-original-legs"
+local RUNTIME_VERSION = "3.32.6-melanie-thicker-legs"
 
 local function startupLog(message)
 	pcall(function()
@@ -333,6 +333,10 @@ environment.CaelusLegacyNekoConfig = {
 			display = "Neko V5",
 			customController = true,
 			preserveEverything = true,
+			legMeshes = {
+				["Left Leg"] = "MelanieLeftLeg.mesh",
+				["Right Leg"] = "MelanieRightLeg.mesh",
+			},
 			keys = {"F", "R", "Z", "X", "C", "V", "Y", "T", "P", "0", "M", "N"},
 		},
 		["Noob Neko"] = {file = "NoobNeko.rbxm", display = "Noob Neko", skinColor = Color3.fromRGB(245, 205, 48), accentColor = Color3.fromRGB(13, 105, 172)},
@@ -1426,48 +1430,98 @@ function state:mountNekoV5OriginalLegShells(
 		return
 	end
 
+	local config = environment.CaelusLegacyNekoConfig.variants["Neko V5"]
+	local legMeshes = config and config.legMeshes
+	local runtime = environment.CaelusRemoteAssetRuntime
+
+	-- Melanie's model itself now points at the two thicker local leg meshes.
+	-- When the remote asset runtime is active, build an equivalent FileMesh shell
+	-- from its resolved URI. SpecialMesh.MeshId can be assigned at runtime, while
+	-- MeshPart.MeshId cannot, so this keeps remote/executor installs working too.
 	for _, legName in ipairs({"Left Leg", "Right Leg"}) do
 		local sourceLeg = driver:FindFirstChild(legName)
 		local realLeg = character:FindFirstChild(legName)
+		local sourceVisual = sourceLeg and sourceLeg:FindFirstChild(legName)
+		local fileName = legMeshes and legMeshes[legName]
+		local resolvedUri = nil
+
+		if fileName
+		and type(runtime) == "table"
+		and type(runtime.getAssetUri) == "function" then
+			local ok, resolved = pcall(
+				runtime.getAssetUri,
+				runtime,
+				fileName
+			)
+			if ok and type(resolved) == "string" and resolved ~= "" then
+				resolvedUri = resolved
+			end
+		end
 
 		if sourceLeg
-			and sourceLeg:IsA("BasePart")
-			and realLeg
-			and realLeg:IsA("BasePart")
-		then
-			local shell = sourceLeg:Clone()
-			shell.Name =
-				"CaelusNekoV5Original"
-				.. legName:gsub("%s+", "")
+		and sourceLeg:IsA("BasePart")
+		and realLeg
+		and realLeg:IsA("BasePart")
+		and sourceVisual
+		and sourceVisual:IsA("MeshPart")
+		and resolvedUri then
+			local relative = sourceLeg.CFrame:ToObjectSpace(sourceVisual.CFrame)
+			local shell = Instance.new("Part")
+			shell.Name = "CaelusNekoV5Thicker" .. legName:gsub("%s+", "")
 			shell:SetAttribute("CaelusDirectWear", true)
-
-			for _, descendant in ipairs(shell:GetDescendants()) do
-				if descendant:IsA("JointInstance")
-					or descendant:IsA("WeldConstraint")
-					or descendant:IsA("Script")
-					or descendant:IsA("LocalScript")
-				then
-					descendant:Destroy()
-				end
-			end
-
+			shell:SetAttribute("CaelusNekoV5CustomLeg", true)
+			shell.Size = sourceVisual.Size
+			shell.CFrame = realLeg.CFrame * relative
+			shell.Color = sourceVisual.Color
+			shell.Material = sourceVisual.Material
+			shell.Reflectance = sourceVisual.Reflectance
+			shell.Transparency = sourceVisual.Transparency
+			shell.CastShadow = sourceVisual.CastShadow
 			shell.Anchored = false
-			shell.CFrame = realLeg.CFrame
 			makePartNonPhysical(shell, true)
 
+			local mesh = Instance.new("SpecialMesh")
+			mesh.Name = "MelanieThickerLegMesh"
+			mesh.MeshType = Enum.MeshType.FileMesh
+			mesh.Scale = Vector3.new(1, 1, 1)
+			mesh.Offset = Vector3.zero
 			pcall(function()
-				shell.LocalTransparencyModifier = 0
+				mesh.TextureId = sourceVisual.TextureID
 			end)
 
-			shell.Parent = wearRoot
+			local meshAssigned = pcall(function()
+				mesh.MeshId = resolvedUri
+			end)
 
-			local weld = Instance.new("WeldConstraint")
-			weld.Name = "CaelusNekoV5LegWeld"
-			weld.Part0 = realLeg
-			weld.Part1 = shell
-			weld.Parent = shell
+			if meshAssigned then
+				mesh.Parent = shell
+				shell.Parent = wearRoot
 
-			table.insert(self.directWearInstances, shell)
+				local weld = Instance.new("WeldConstraint")
+				weld.Name = "CaelusNekoV5ThickerLegWeld"
+				weld.Part0 = realLeg
+				weld.Part1 = shell
+				weld.Parent = shell
+
+				-- Keep the original MeshPart as the invisible weld anchor for the
+				-- sock/decal assembly. This preserves Melanie's original clothing.
+				sourceVisual.Transparency = 1
+				sourceVisual:SetAttribute("CaelusNekoV5BodyMeshReplaced", true)
+
+				table.insert(self.directWearInstances, shell)
+				startupLog(
+					"Mounted Melanie thicker "
+						.. legName
+						.. " from "
+						.. tostring(fileName)
+				)
+			else
+				shell:Destroy()
+				startupLog(
+					"Could not assign Melanie custom mesh for "
+						.. legName
+				)
+			end
 		end
 	end
 end
