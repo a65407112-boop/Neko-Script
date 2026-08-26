@@ -14,7 +14,7 @@ local Debris = game:GetService("Debris")
 local HttpService = game:GetService("HttpService")
 
 local environment = (type(getgenv) == "function" and getgenv()) or _G
-local RUNTIME_VERSION = "3.34.3-stable-editor-color"
+local RUNTIME_VERSION = "3.34.4-editor-regression-fix"
 
 local function startupLog(message)
 	pcall(function()
@@ -5065,6 +5065,14 @@ local function rebuildOriginalUpperScarf(shadow)
 			clearUpperScarfTracking()
 			return false
 		end
+
+		if state.activeMorph == CUSTOM_MORPH_NAME
+			and state.activeCustomNeko
+			and typeof(state.activeCustomNeko.detailColor) == "Color3"
+		then
+			part.Color = state.activeCustomNeko.detailColor
+		end
+
 		registerWearPart(
 			part,
 			torso,
@@ -5270,6 +5278,9 @@ local function applyMorph(versionName, morphName)
 			name = state.customNeko.name,
 			version = state.customNeko.version or versionName,
 			skinColor = state.customNeko.skinColor,
+			detailColor =
+				state.customNeko.detailColor
+				or DEFAULT_CUSTOM_DETAIL_COLOR,
 			assetIds = assetIds,
 			use3DPants = state.customNeko.use3DPants ~= false,
 			beltParts = copyPieceSelection(
@@ -6978,22 +6989,27 @@ end
 
 function environment.CaelusPendalarNekoUI:ShowEditorTab()
 	local tab = self.EditorTab
-	local tabFrame = tab and tab.Tab
 
-	if not tabFrame or not tabFrame.Parent then
+	if not tab then
 		return
 	end
 
-	for _, child in ipairs(tabFrame.Parent:GetChildren()) do
-		if child:IsA("Frame")
-			and child ~= tabFrame
-			and child.Name ~= "tab buttons"
-		then
-			child.Visible = false
+	if self.Window
+		and type(self.Window.SetMainTab) == "function"
+	then
+		local switched = pcall(function()
+			self.Window:SetMainTab(tab)
+		end)
+
+		if switched then
+			return
 		end
 	end
 
-	tabFrame.Visible = true
+	local tabFrame = tab.Tab
+	if tabFrame and tabFrame.Parent then
+		tabFrame.Visible = true
+	end
 end
 
 function environment.CaelusPendalarNekoUI:LoadEditorConfig(config)
@@ -7430,6 +7446,64 @@ function environment.CaelusPendalarNekoUI:FindCreatedGui(
 	return nil
 end
 
+
+function environment.CaelusPendalarNekoUI:CreateEditor3DPantsControl(editorTab)
+	local scrollingFrame =
+		editorTab.Tab:FindFirstChildOfClass("ScrollingFrame")
+
+	if not scrollingFrame then
+		return
+	end
+
+	local existing =
+		scrollingFrame:FindFirstChild("Editor_3D_Pants")
+
+	if existing then
+		existing:Destroy()
+	end
+
+	local pantsButton = Instance.new("TextButton")
+	pantsButton.Name = "Editor_3D_Pants"
+	pantsButton.LayoutOrder = -5000
+	pantsButton.Size = UDim2.fromOffset(385, 39)
+	pantsButton.BackgroundColor3 = Color3.fromRGB(194, 73, 115)
+	pantsButton.BorderSizePixel = 0
+	pantsButton.AutoButtonColor = false
+	pantsButton.Font = Enum.Font.RobotoBold
+	pantsButton.Text = "   3D Pants"
+	pantsButton.TextColor3 = Color3.new(1, 1, 1)
+	pantsButton.TextSize = 15
+	pantsButton.TextXAlignment = Enum.TextXAlignment.Left
+	pantsButton:SetAttribute("CaelusEditorPieceControl", true)
+	pantsButton.Parent = scrollingFrame
+
+	local pantsCorner = Instance.new("UICorner")
+	pantsCorner.CornerRadius = UDim.new(0, 5)
+	pantsCorner.Parent = pantsButton
+
+	local pantsStatus = Instance.new("TextLabel")
+	pantsStatus.Name = "status"
+	pantsStatus.BackgroundTransparency = 1
+	pantsStatus.Position = UDim2.new(1, -52, 0, 0)
+	pantsStatus.Size = UDim2.fromOffset(42, 39)
+	pantsStatus.Font = Enum.Font.RobotoBold
+	pantsStatus.TextSize = 11
+	pantsStatus.TextXAlignment = Enum.TextXAlignment.Right
+	pantsStatus.Parent = pantsButton
+
+	self.Editor3DPantsButton = pantsButton
+
+	pantsButton.MouseButton1Click:Connect(function()
+		self.EditorUse3DPants =
+			self.EditorUse3DPants == false
+
+		self:RefreshEditorPieceControls()
+	end)
+
+	self:RefreshEditorPieceControls()
+	self:FixTabScrolling(editorTab)
+end
+
 function environment.CaelusPendalarNekoUI:CreateEditorPieceControls(editorTab)
 	local scrollingFrame =
 		editorTab.Tab:FindFirstChildOfClass("ScrollingFrame")
@@ -7519,42 +7593,6 @@ function environment.CaelusPendalarNekoUI:CreateEditorPieceControls(editorTab)
 			self:RefreshEditorPieceControls()
 		end)
 	end
-
-	local pantsButton = Instance.new("TextButton")
-	pantsButton.Name = "Editor_3D_Pants"
-	pantsButton.LayoutOrder = 29990
-	pantsButton.Size = UDim2.fromOffset(385, 39)
-	pantsButton.BackgroundColor3 = Color3.fromRGB(194, 73, 115)
-	pantsButton.BorderSizePixel = 0
-	pantsButton.AutoButtonColor = false
-	pantsButton.Font = Enum.Font.RobotoBold
-	pantsButton.Text = "   3D Pants"
-	pantsButton.TextColor3 = Color3.new(1, 1, 1)
-	pantsButton.TextSize = 15
-	pantsButton.TextXAlignment = Enum.TextXAlignment.Left
-	pantsButton:SetAttribute("CaelusEditorPieceControl", true)
-	pantsButton.Parent = scrollingFrame
-
-	local pantsCorner = Instance.new("UICorner")
-	pantsCorner.CornerRadius = UDim.new(0, 5)
-	pantsCorner.Parent = pantsButton
-
-	local pantsStatus = Instance.new("TextLabel")
-	pantsStatus.Name = "status"
-	pantsStatus.BackgroundTransparency = 1
-	pantsStatus.Position = UDim2.new(1, -52, 0, 0)
-	pantsStatus.Size = UDim2.fromOffset(42, 39)
-	pantsStatus.Font = Enum.Font.RobotoBold
-	pantsStatus.TextSize = 11
-	pantsStatus.TextXAlignment = Enum.TextXAlignment.Right
-	pantsStatus.Parent = pantsButton
-
-	self.Editor3DPantsButton = pantsButton
-
-	pantsButton.MouseButton1Click:Connect(function()
-		self.EditorUse3DPants = self.EditorUse3DPants == false
-		self:RefreshEditorPieceControls()
-	end)
 
 	makeHeader("Belt Piece Visibility", 30000)
 
@@ -7717,6 +7755,7 @@ function environment.CaelusPendalarNekoUI:Build()
 	self.SettingsTab = settingsTab
 	self.EditorTab = editorTab
 	self.ScriptsTab = scriptsTab
+	self.CreditsTab = creditsTab
 	self.SavedNekoButtons = {}
 
 	-- FE Animations uses a direct Settings row instead of Pendalar's
@@ -7945,6 +7984,8 @@ function environment.CaelusPendalarNekoUI:Build()
 		"Editor Version : " .. self.EditorVersion
 	)
 
+	self:CreateEditor3DPantsControl(editorTab)
+
 	environment.CaelusNekoBootStatus(
 		"Caelus Neko: building Neko Editor..."
 	)
@@ -8048,11 +8089,17 @@ function environment.CaelusPendalarNekoUI:Build()
 	creditsTab:NewLabel("Larry")
 	creditsTab:NewLabel("melanie070910")
 
+	-- Preserve every original Pendalar tab and give each one its real
+	-- content height. Scripts/Credits were still populated, but could appear
+	-- blank/clipped after the editor's custom controls changed layout.
 	self:FixTabScrolling(nekosTab)
 	self:FixTabScrolling(settingsTab)
+	self:FixTabScrolling(editorTab)
+	self:FixTabScrolling(scriptsTab)
+	self:FixTabScrolling(creditsTab)
 
 	window:SetMainTab(nekosTab)
-	window:SetFooter("Current Version : 3.34.3")
+	window:SetFooter("Current Version : 3.34.4")
 
 	self.Window = window
 
