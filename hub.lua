@@ -14,31 +14,112 @@ end
 local BASE_URL =
     "https://raw.githubusercontent.com/a65407112-boop/Neko-Script/3791149/hub.lua"
 
-local function fetchBase()
-    local ok, result = pcall(function()
-        return game:HttpGet(BASE_URL)
-    end)
+local environment = (type(getgenv) == "function" and getgenv()) or _G
+local patchProblems = {}
+local originalBase
 
-    if not ok or type(result) ~= "string" or result == "" then
-        error(
-            "[Caelus Neko 3.32.8] Could not download the pinned base hub: "
-                .. tostring(result),
-            0
-        )
+local function executorFunction(name)
+    local value = rawget(environment, name)
+    if type(value) == "function" then
+        return value
     end
 
-    return result
+    value = rawget(_G, name)
+    if type(value) == "function" then
+        return value
+    end
+
+    return nil
+end
+
+local function requestFunction()
+    for _, name in ipairs({"request", "http_request", "httprequest"}) do
+        local candidate = executorFunction(name)
+        if candidate then
+            return candidate
+        end
+    end
+
+    local syn = rawget(environment, "syn")
+    if type(syn) == "table" and type(syn.request) == "function" then
+        return syn.request
+    end
+
+    local http = rawget(environment, "http")
+    if type(http) == "table" and type(http.request) == "function" then
+        return http.request
+    end
+
+    return nil
+end
+
+local function fetchBase()
+    local request = requestFunction()
+    local lastProblem = "download failed"
+
+    for attempt = 1, 3 do
+        if request then
+            local ok, response = pcall(request, {
+                Url = BASE_URL,
+                Method = "GET",
+                Headers = {
+                    ["Cache-Control"] = "no-cache",
+                },
+            })
+
+            if ok and type(response) == "table" then
+                local body = response.Body or response.body
+                local status = tonumber(
+                    response.StatusCode
+                    or response.Status
+                    or response.status
+                )
+
+                if type(body) == "string"
+                    and #body > 1000
+                    and (not status or status < 400)
+                then
+                    return body
+                end
+
+                lastProblem =
+                    "HTTP " .. tostring(status or "?")
+                    .. " / empty response"
+            else
+                lastProblem = tostring(response)
+            end
+        end
+
+        local ok, body = pcall(function()
+            return game:HttpGet(
+                BASE_URL .. "?caelus=" .. tostring(os.time()) .. tostring(attempt)
+            )
+        end)
+
+        if ok and type(body) == "string" and #body > 1000 then
+            return body
+        end
+
+        lastProblem = tostring(body or lastProblem)
+
+        if attempt < 3 then
+            task.wait(0.4 * attempt)
+        end
+    end
+
+    error(
+        "[Caelus Neko 3.32.8] Could not download the base hub: "
+            .. tostring(lastProblem),
+        0
+    )
 end
 
 local function replaceOnce(source, needle, replacement, label)
     local first, last = string.find(source, needle, 1, true)
 
     if not first then
-        error(
-            "[Caelus Neko 3.32.8] Patch anchor missing: "
-                .. tostring(label),
-            0
-        )
+        table.insert(patchProblems, tostring(label))
+        return source
     end
 
     return string.sub(source, 1, first - 1)
@@ -46,7 +127,8 @@ local function replaceOnce(source, needle, replacement, label)
         .. string.sub(source, last + 1)
 end
 
-local source = fetchBase()
+originalBase = fetchBase()
+local source = originalBase
 
 source = replaceOnce(
     source,
@@ -681,25 +763,55 @@ source = replaceOnce(
     "ready version"
 )
 
-local chunk, compileProblem =
-    loadstring(source, "=CaelusNekoHub_3_32_8")
+local function runSource(sourceText, chunkName)
+    local chunk, compileProblem = loadstring(sourceText, chunkName)
 
-if not chunk then
+    if not chunk then
+        return false, "compile failed: " .. tostring(compileProblem)
+    end
+
+    local ok, result = pcall(chunk)
+    if not ok then
+        return false, "runtime failed: " .. tostring(result)
+    end
+
+    return true, result
+end
+
+if #patchProblems > 0 then
+    warn(
+        "[Caelus Neko 3.32.8] Optional patch anchors changed: "
+            .. table.concat(patchProblems, ", ")
+            .. ". Launching the known-good base hub instead."
+    )
+
+    local ok, result = runSource(originalBase, "=CaelusNekoHub_BaseFallback")
+    if not ok then
+        error("[Caelus Neko] Base fallback " .. tostring(result), 0)
+    end
+    return result
+end
+
+local ok, result = runSource(source, "=CaelusNekoHub_3_32_8")
+if ok then
+    return result
+end
+
+warn(
+    "[Caelus Neko 3.32.8] Patched hub "
+        .. tostring(result)
+        .. ". Falling back to the known-good base hub."
+)
+
+local fallbackOk, fallbackResult =
+    runSource(originalBase, "=CaelusNekoHub_BaseFallback")
+
+if not fallbackOk then
     error(
-        "[Caelus Neko 3.32.8] Patched hub compile failed: "
-            .. tostring(compileProblem),
+        "[Caelus Neko] Patch failed and base fallback also failed: "
+            .. tostring(fallbackResult),
         0
     )
 end
 
-local ok, result = pcall(chunk)
-
-if not ok then
-    error(
-        "[Caelus Neko 3.32.8] Patched hub runtime failed: "
-            .. tostring(result),
-        0
-    )
-end
-
-return result
+return fallbackResult
