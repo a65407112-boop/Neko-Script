@@ -14,112 +14,31 @@ end
 local BASE_URL =
     "https://raw.githubusercontent.com/a65407112-boop/Neko-Script/3791149/hub.lua"
 
-local environment = (type(getgenv) == "function" and getgenv()) or _G
-local patchProblems = {}
-local originalBase
-
-local function executorFunction(name)
-    local value = rawget(environment, name)
-    if type(value) == "function" then
-        return value
-    end
-
-    value = rawget(_G, name)
-    if type(value) == "function" then
-        return value
-    end
-
-    return nil
-end
-
-local function requestFunction()
-    for _, name in ipairs({"request", "http_request", "httprequest"}) do
-        local candidate = executorFunction(name)
-        if candidate then
-            return candidate
-        end
-    end
-
-    local syn = rawget(environment, "syn")
-    if type(syn) == "table" and type(syn.request) == "function" then
-        return syn.request
-    end
-
-    local http = rawget(environment, "http")
-    if type(http) == "table" and type(http.request) == "function" then
-        return http.request
-    end
-
-    return nil
-end
-
 local function fetchBase()
-    local request = requestFunction()
-    local lastProblem = "download failed"
+    local ok, result = pcall(function()
+        return game:HttpGet(BASE_URL)
+    end)
 
-    for attempt = 1, 3 do
-        if request then
-            local ok, response = pcall(request, {
-                Url = BASE_URL,
-                Method = "GET",
-                Headers = {
-                    ["Cache-Control"] = "no-cache",
-                },
-            })
-
-            if ok and type(response) == "table" then
-                local body = response.Body or response.body
-                local status = tonumber(
-                    response.StatusCode
-                    or response.Status
-                    or response.status
-                )
-
-                if type(body) == "string"
-                    and #body > 1000
-                    and (not status or status < 400)
-                then
-                    return body
-                end
-
-                lastProblem =
-                    "HTTP " .. tostring(status or "?")
-                    .. " / empty response"
-            else
-                lastProblem = tostring(response)
-            end
-        end
-
-        local ok, body = pcall(function()
-            return game:HttpGet(
-                BASE_URL .. "?caelus=" .. tostring(os.time()) .. tostring(attempt)
-            )
-        end)
-
-        if ok and type(body) == "string" and #body > 1000 then
-            return body
-        end
-
-        lastProblem = tostring(body or lastProblem)
-
-        if attempt < 3 then
-            task.wait(0.4 * attempt)
-        end
+    if not ok or type(result) ~= "string" or result == "" then
+        error(
+            "[Caelus Neko 3.32.8] Could not download the pinned base hub: "
+                .. tostring(result),
+            0
+        )
     end
 
-    error(
-        "[Caelus Neko 3.32.8] Could not download the base hub: "
-            .. tostring(lastProblem),
-        0
-    )
+    return result
 end
 
 local function replaceOnce(source, needle, replacement, label)
     local first, last = string.find(source, needle, 1, true)
 
     if not first then
-        table.insert(patchProblems, tostring(label))
-        return source
+        error(
+            "[Caelus Neko 3.32.8] Patch anchor missing: "
+                .. tostring(label),
+            0
+        )
     end
 
     return string.sub(source, 1, first - 1)
@@ -127,13 +46,12 @@ local function replaceOnce(source, needle, replacement, label)
         .. string.sub(source, last + 1)
 end
 
-originalBase = fetchBase()
-local source = originalBase
+local source = fetchBase()
 
 source = replaceOnce(
     source,
     'local RUNTIME_VERSION = "3.32.7-fe-toggle-hard-ui"',
-    'local RUNTIME_VERSION = "3.32.8-custom-controls"',
+    'local RUNTIME_VERSION = "3.32.9-pendalar-saved-scroll"',
     "runtime version"
 )
 
@@ -752,66 +670,394 @@ source = replaceOnce(
 source = replaceOnce(
     source,
     'window:SetFooter("Current Version : 3.32.7")',
-    'window:SetFooter("Current Version : 3.32.8")',
+    'window:SetFooter("Current Version : 3.32.9")',
     "Pendalar footer version"
 )
 
 source = replaceOnce(
     source,
     'environment.CaelusNekoBootStatus("Caelus Neko 3.32.5: ready")',
-    'environment.CaelusNekoBootStatus("Caelus Neko 3.32.8: ready")',
+    'environment.CaelusNekoBootStatus("Caelus Neko 3.32.9: ready")',
     "ready version"
 )
 
-local function runSource(sourceText, chunkName)
-    local chunk, compileProblem = loadstring(sourceText, chunkName)
+local chunk, compileProblem =
+    loadstring(source, "=CaelusNekoHub_3_32_8")
 
-    if not chunk then
-        return false, "compile failed: " .. tostring(compileProblem)
-    end
-
-    local ok, result = pcall(chunk)
-    if not ok then
-        return false, "runtime failed: " .. tostring(result)
-    end
-
-    return true, result
-end
-
-if #patchProblems > 0 then
-    warn(
-        "[Caelus Neko 3.32.8] Optional patch anchors changed: "
-            .. table.concat(patchProblems, ", ")
-            .. ". Launching the known-good base hub instead."
-    )
-
-    local ok, result = runSource(originalBase, "=CaelusNekoHub_BaseFallback")
-    if not ok then
-        error("[Caelus Neko] Base fallback " .. tostring(result), 0)
-    end
-    return result
-end
-
-local ok, result = runSource(source, "=CaelusNekoHub_3_32_8")
-if ok then
-    return result
-end
-
-warn(
-    "[Caelus Neko 3.32.8] Patched hub "
-        .. tostring(result)
-        .. ". Falling back to the known-good base hub."
-)
-
-local fallbackOk, fallbackResult =
-    runSource(originalBase, "=CaelusNekoHub_BaseFallback")
-
-if not fallbackOk then
+if not chunk then
     error(
-        "[Caelus Neko] Patch failed and base fallback also failed: "
-            .. tostring(fallbackResult),
+        "[Caelus Neko 3.32.8] Patched hub compile failed: "
+            .. tostring(compileProblem),
         0
     )
 end
 
-return fallbackResult
+local ok, result = pcall(chunk)
+
+if not ok then
+	error(
+		"[Caelus Neko 3.32.9] Patched hub runtime failed: "
+			.. tostring(result),
+		0
+	)
+end
+
+local function installPendalarRuntimeFixes()
+	local ui = environment.CaelusPendalarNekoUI
+	local api = environment.CaelusNekoAPI
+	local session = api and api.Session
+
+	if type(ui) ~= "table"
+		or type(api) ~= "table"
+		or type(session) ~= "table"
+		or not ui.GuiRoot
+	then
+		warn("[Caelus Neko 3.32.9] Pendalar runtime fix could not find the UI/session.")
+		return
+	end
+
+	local main = ui.GuiRoot:FindFirstChild("Main")
+	if not main then
+		warn("[Caelus Neko 3.32.9] Pendalar Main frame was not found.")
+		return
+	end
+
+	local scrollConnections = {}
+
+	local function disconnectScrollConnections(scrollingFrame)
+		local existing = scrollConnections[scrollingFrame]
+		if not existing then
+			return
+		end
+
+		for _, connection in ipairs(existing) do
+			pcall(function()
+				connection:Disconnect()
+			end)
+		end
+
+		scrollConnections[scrollingFrame] = nil
+	end
+
+	local function bindScrollingFrame(scrollingFrame)
+		if not scrollingFrame or not scrollingFrame:IsA("ScrollingFrame") then
+			return
+		end
+
+		disconnectScrollConnections(scrollingFrame)
+
+		local layout = scrollingFrame:FindFirstChildOfClass("UIListLayout")
+		if not layout then
+			return
+		end
+
+		scrollingFrame.Active = true
+		scrollingFrame.ScrollingEnabled = true
+		scrollingFrame.ScrollingDirection = Enum.ScrollingDirection.Y
+		scrollingFrame.ScrollBarThickness = math.max(scrollingFrame.ScrollBarThickness, 5)
+		scrollingFrame.AutomaticCanvasSize = Enum.AutomaticSize.None
+
+		local queued = false
+		local function updateCanvas()
+			if queued then
+				return
+			end
+
+			queued = true
+			task.defer(function()
+				queued = false
+
+				if not scrollingFrame.Parent or not layout.Parent then
+					return
+				end
+
+				local contentHeight = math.ceil(layout.AbsoluteContentSize.Y) + 48
+				local viewportHeight = math.ceil(scrollingFrame.AbsoluteSize.Y)
+				local canvasHeight = math.max(contentHeight, viewportHeight + 1)
+
+				scrollingFrame.CanvasSize = UDim2.fromOffset(0, canvasHeight)
+
+				local maxScroll = math.max(0, canvasHeight - viewportHeight)
+				if scrollingFrame.CanvasPosition.Y > maxScroll then
+					scrollingFrame.CanvasPosition = Vector2.new(
+						scrollingFrame.CanvasPosition.X,
+						maxScroll
+					)
+				end
+			end)
+		end
+
+		scrollConnections[scrollingFrame] = {
+			layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(updateCanvas),
+			scrollingFrame.ChildAdded:Connect(updateCanvas),
+			scrollingFrame.ChildRemoved:Connect(updateCanvas),
+			scrollingFrame:GetPropertyChangedSignal("AbsoluteSize"):Connect(updateCanvas),
+		}
+
+		updateCanvas()
+	end
+
+	local function findTabScroll(tabName)
+		local tabFrame = main:FindFirstChild(tabName)
+		if not tabFrame then
+			return nil
+		end
+
+		return tabFrame:FindFirstChildOfClass("ScrollingFrame")
+	end
+
+	local function copyValue(value, seen)
+		if type(value) ~= "table" then
+			return value
+		end
+
+		seen = seen or {}
+		if seen[value] then
+			return seen[value]
+		end
+
+		local resultTable = {}
+		seen[value] = resultTable
+
+		for key, item in pairs(value) do
+			resultTable[copyValue(key, seen)] = copyValue(item, seen)
+		end
+
+		return resultTable
+	end
+
+	local function sortedSavedPresets()
+		local presets = {}
+
+		for _, preset in pairs(session.savedPresets or {}) do
+			if type(preset) == "table" and type(preset.name) == "string" then
+				table.insert(presets, preset)
+			end
+		end
+
+		table.sort(presets, function(left, right)
+			return string.lower(left.name) < string.lower(right.name)
+		end)
+
+		return presets
+	end
+
+	local function clearRuntimeSavedButtons(scrollingFrame)
+		for _, child in ipairs(scrollingFrame:GetChildren()) do
+			if child:GetAttribute("CaelusPendalarSavedNeko") == true
+				or child:GetAttribute("CaelusSavedCustomNeko") == true
+			then
+				child:Destroy()
+			end
+		end
+	end
+
+	local function makeSavedButton(scrollingFrame, preset, layoutOrder)
+		local presetName = tostring(preset.name)
+		local versionName = tostring(preset.version or "V4")
+
+		local button = Instance.new("TextButton")
+		button.Name = "★ " .. presetName
+		button.LayoutOrder = layoutOrder
+		button.Size = UDim2.fromOffset(385, 39)
+		button.BackgroundColor3 = Color3.fromRGB(194, 73, 115)
+		button.BorderSizePixel = 0
+		button.AutoButtonColor = false
+		button.Font = Enum.Font.Roboto
+		button.Text = "★ " .. presetName
+		button.TextColor3 = Color3.new(1, 1, 1)
+		button.TextSize = 17
+		button:SetAttribute("CaelusPendalarSavedNeko", true)
+		button.Parent = scrollingFrame
+
+		local corner = Instance.new("UICorner")
+		corner.Name = "butcorner"
+		corner.CornerRadius = UDim.new(0, 5)
+		corner.Parent = button
+
+		local infoButton = Instance.new("ImageButton")
+		infoButton.Name = "infobutton"
+		infoButton.BackgroundTransparency = 1
+		infoButton.Position = UDim2.new(0, 11, 0.5, -10)
+		infoButton.Size = UDim2.fromOffset(20, 20)
+		infoButton.Image = "http://www.roblox.com/asset/?id=6294110112"
+		infoButton.Parent = button
+
+		local showingInfo = false
+
+		infoButton.MouseButton1Click:Connect(function()
+			showingInfo = not showingInfo
+			if showingInfo then
+				button.Text = "Saved Custom Neko • " .. versionName
+				button.TextSize = 13
+			else
+				button.Text = "★ " .. presetName
+				button.TextSize = 17
+			end
+		end)
+
+		button.MouseButton1Click:Connect(function()
+			if showingInfo then
+				return
+			end
+
+			local currentPreset = session.savedPresets
+				and session.savedPresets[presetName]
+
+			if type(currentPreset) ~= "table" then
+				warn("[Pendalar Hub] Saved Neko no longer exists: " .. presetName)
+				return
+			end
+
+			session.customNeko = copyValue(currentPreset)
+			session.selectedMorph = "Custom Neko"
+			session.selectedVersion = currentPreset.version
+				or session.selectedVersion
+				or "V4"
+
+			if ui.VersionLabel then
+				ui.VersionLabel.Text =
+					"Selected Neko Version : " .. tostring(session.selectedVersion)
+			end
+
+			local applied, problem = api:ApplySelectedCustom()
+			if not applied then
+				warn("[Pendalar Hub] " .. tostring(problem))
+			end
+		end)
+
+		return button
+	end
+
+	local savedSignature = nil
+
+	local function currentSavedSignature()
+		local names = {}
+
+		for _, preset in ipairs(sortedSavedPresets()) do
+			table.insert(
+				names,
+				tostring(preset.name)
+					.. "\0"
+					.. tostring(preset.version or "")
+					.. "\0"
+					.. tostring(#(preset.assetIds or {}))
+			)
+		end
+
+		return table.concat(names, "\1")
+	end
+
+	local function refreshSavedNekos(force)
+		local scrollingFrame = findTabScroll("Nekos")
+		if not scrollingFrame then
+			return
+		end
+
+		local signature = currentSavedSignature()
+		if not force and signature == savedSignature then
+			return
+		end
+
+		savedSignature = signature
+		clearRuntimeSavedButtons(scrollingFrame)
+
+		for index, preset in ipairs(sortedSavedPresets()) do
+			makeSavedButton(scrollingFrame, preset, 10000 + index)
+		end
+
+		bindScrollingFrame(scrollingFrame)
+	end
+
+	ui.RefreshSavedNekos = function(_, force)
+		refreshSavedNekos(force ~= false)
+	end
+
+	ui.FitTabScroll = function(_, tab)
+		local scrollingFrame
+
+		if type(tab) == "table" and tab.Tab then
+			scrollingFrame = tab.Tab:FindFirstChildOfClass("ScrollingFrame")
+		elseif typeof(tab) == "Instance" then
+			if tab:IsA("ScrollingFrame") then
+				scrollingFrame = tab
+			else
+				scrollingFrame = tab:FindFirstChildOfClass("ScrollingFrame")
+			end
+		end
+
+		if scrollingFrame then
+			bindScrollingFrame(scrollingFrame)
+		end
+	end
+
+	for _, tabName in ipairs({
+		"Nekos",
+		"Settings",
+		"Neko Editor",
+		"Scripts",
+		"Credits",
+	}) do
+		bindScrollingFrame(findTabScroll(tabName))
+	end
+
+	refreshSavedNekos(true)
+
+	task.spawn(function()
+		while not session.destroyed
+			and environment.CaelusPendalarNekoUI == ui
+			and ui.GuiRoot
+			and ui.GuiRoot.Parent
+		do
+			refreshSavedNekos(false)
+
+			for _, tabName in ipairs({
+				"Nekos",
+				"Settings",
+				"Neko Editor",
+				"Scripts",
+				"Credits",
+			}) do
+				local scrollingFrame = findTabScroll(tabName)
+				if scrollingFrame then
+					local layout =
+						scrollingFrame:FindFirstChildOfClass("UIListLayout")
+					if layout then
+						local wantedHeight =
+							math.max(
+								math.ceil(layout.AbsoluteContentSize.Y) + 48,
+								math.ceil(scrollingFrame.AbsoluteSize.Y) + 1
+							)
+
+						if math.abs(
+							scrollingFrame.CanvasSize.Y.Offset - wantedHeight
+						) > 2 then
+							scrollingFrame.CanvasSize =
+								UDim2.fromOffset(0, wantedHeight)
+						end
+					end
+				end
+			end
+
+			task.wait(0.75)
+		end
+
+		for scrollingFrame in pairs(scrollConnections) do
+			disconnectScrollConnections(scrollingFrame)
+		end
+	end)
+
+	print(
+		"[Caelus Neko 3.32.9] Pendalar saved-Neko and scrolling fixes active."
+	)
+end
+
+local fixOk, fixProblem = pcall(installPendalarRuntimeFixes)
+if not fixOk then
+	warn(
+		"[Caelus Neko 3.32.9] Pendalar runtime fix failed: "
+			.. tostring(fixProblem)
+	)
+end
+
+return result
