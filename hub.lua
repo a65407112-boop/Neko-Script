@@ -1030,6 +1030,50 @@ merged = merged:gsub(
 	1
 )
 
+if type(loadstring) ~= "function" then
+	error("[Full Hub Builder] loadstring() is unavailable.", 0)
+end
+
+local mergedChunk, mergedCompileProblem =
+	loadstring(merged, "=CaelusNekoFullStandalone")
+
+if not mergedChunk then
+	warn(
+		"[Full Hub Builder] The merged full hub did not compile: "
+			.. tostring(mergedCompileProblem)
+	)
+	warn(
+		"[Full Hub Builder] Launching the known-good original hub instead."
+	)
+
+	local baseChunk, baseCompileProblem =
+		loadstring(source, "=CaelusNekoKnownGoodFallback")
+
+	if not baseChunk then
+		error(
+			"[Full Hub Builder] Base fallback compile failed: "
+				.. tostring(baseCompileProblem),
+			0
+		)
+	end
+
+	local baseOk, baseProblem = pcall(baseChunk)
+
+	if not baseOk then
+		error(
+			"[Full Hub Builder] Base fallback runtime failed: "
+				.. tostring(baseProblem),
+			0
+		)
+	end
+
+	error(
+		"[Full Hub Builder] The full merged hub had a compile error. "
+			.. "Copy the console error above and send it to me.",
+		0
+	)
+end
+
 if makefolder then
 	local folderExists = false
 
@@ -1085,4 +1129,49 @@ print(
 
 if setclipboard then
 	pcall(setclipboard, OUTPUT_PATH)
+end
+
+print("[Full Hub Builder] Launching the generated full hub now...")
+
+local runOk, runProblem = pcall(mergedChunk)
+
+if not runOk then
+	warn(
+		"[Full Hub Builder] Generated hub runtime failed: "
+			.. tostring(runProblem)
+	)
+	warn(
+		"[Full Hub Builder] Launching the known-good original hub instead."
+	)
+
+	local fallbackChunk, fallbackCompileProblem =
+		loadstring(source, "=CaelusNekoKnownGoodFallback")
+
+	if not fallbackChunk then
+		error(
+			"[Full Hub Builder] Base fallback compile failed: "
+				.. tostring(fallbackCompileProblem),
+			0
+		)
+	end
+
+	local fallbackOk, fallbackProblem =
+		pcall(fallbackChunk)
+
+	if not fallbackOk then
+		error(
+			"[Full Hub Builder] Base fallback runtime failed: "
+				.. tostring(fallbackProblem),
+			0
+		)
+	end
+
+	warn(
+		"[Full Hub Builder] The original hub is running. "
+			.. "Send me the generated-hub runtime error above."
+	)
+else
+	print(
+		"[Full Hub Builder] Generated full hub launched successfully."
+	)
 end
