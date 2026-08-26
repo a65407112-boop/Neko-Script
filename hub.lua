@@ -14,7 +14,7 @@ local Debris = game:GetService("Debris")
 local HttpService = game:GetService("HttpService")
 
 local environment = (type(getgenv) == "function" and getgenv()) or _G
-local RUNTIME_VERSION = "3.32.8-custom-controls"
+local RUNTIME_VERSION = "3.33.0-animation-state-fix"
 
 local function startupLog(message)
 	pcall(function()
@@ -486,6 +486,7 @@ local state = {
 	originalClawRunSpeedEnabled = false,
 	customIdleAnimationEnabled = true,
 	customWalkAnimationEnabled = true,
+	customJumpAnimationEnabled = false,
 	customPunchAnimationEnabled = true,
 	punchWithClawsEnabled = false,
 	useDefaultLocomotionPose = false,
@@ -493,6 +494,7 @@ local state = {
 	punchPoseUntil = 0,
 	specialPoseUntil = 0,
 	actionKeysHeld = {},
+	actionKeyDeadlines = {},
 	feAnimationsEnabled = false,
 	feAnimationConnections = {},
 	feAnimationTracks = {},
@@ -1144,6 +1146,7 @@ local function restoreDirectWear()
 	state.punchPoseUntil = 0
 	state.specialPoseUntil = 0
 	table.clear(state.actionKeysHeld)
+	table.clear(state.actionKeyDeadlines)
 
 	for part, value in pairs(state.originalAccessoryTransparency) do
 		if part and part.Parent then
@@ -1313,7 +1316,7 @@ local function setupDirectPose(driver, character)
 					return
 				end
 
-				if state.useDefaultLocomotionPose then
+				if state:shouldUseDefaultLocomotionAnimation() then
 					return
 				end
 
@@ -1634,6 +1637,24 @@ function state:isNekoActionKey(keyName)
 	return table.find(keys, normalized) ~= nil, normalized
 end
 
+function state:pruneExpiredActionKeys(now)
+	now = now or os.clock()
+
+	for keyName, deadline in pairs(self.actionKeyDeadlines) do
+		if deadline ~= math.huge and now >= deadline then
+			self.actionKeyDeadlines[keyName] = nil
+			self.actionKeysHeld[keyName] = nil
+		end
+	end
+end
+
+function state:isAirborneForAnimation(humanoid, humanoidState)
+	return humanoidState == Enum.HumanoidStateType.Jumping
+		or humanoidState == Enum.HumanoidStateType.Freefall
+		or humanoidState == Enum.HumanoidStateType.FallingDown
+		or humanoid.FloorMaterial == Enum.Material.Air
+end
+
 function state:shouldUseDefaultLocomotionAnimation()
 	local humanoid = self.realHumanoid
 
@@ -1642,6 +1663,7 @@ function state:shouldUseDefaultLocomotionAnimation()
 	end
 
 	local now = os.clock()
+	self:pruneExpiredActionKeys(now)
 
 	if self.primaryAttackHeld
 		or now < (self.punchPoseUntil or 0)
@@ -1649,21 +1671,20 @@ function state:shouldUseDefaultLocomotionAnimation()
 		return self.customPunchAnimationEnabled ~= true
 	end
 
-	if next(self.actionKeysHeld) ~= nil
-		or now < (self.specialPoseUntil or 0)
-	then
+	-- Neko actions may use their pose only while their input is active.
+	if next(self.actionKeysHeld) ~= nil then
 		return false
 	end
 
 	local humanoidState = humanoid:GetState()
 
+	if self:isAirborneForAnimation(humanoid, humanoidState) then
+		return self.customJumpAnimationEnabled ~= true
+	end
+
 	if humanoid.Sit
-		or humanoidState == Enum.HumanoidStateType.Jumping
-		or humanoidState == Enum.HumanoidStateType.Freefall
-		or humanoidState == Enum.HumanoidStateType.FallingDown
 		or humanoidState == Enum.HumanoidStateType.Climbing
 		or humanoidState == Enum.HumanoidStateType.Swimming
-		or humanoid.FloorMaterial == Enum.Material.Air
 	then
 		return false
 	end
@@ -1679,12 +1700,6 @@ function state:updateLocomotionAnimationPolicy(force)
 	local useDefault =
 		self:shouldUseDefaultLocomotionAnimation()
 
-	if not force
-		and self.useDefaultLocomotionPose == useDefault
-	then
-		return useDefault
-	end
-
 	local changed =
 		self.useDefaultLocomotionPose ~= useDefault
 
@@ -1692,19 +1707,28 @@ function state:updateLocomotionAnimationPolicy(force)
 
 	local animate = self.animateScript
 	if animate and animate.Parent then
-		pcall(function()
-			animate.Disabled = not useDefault
-		end)
+		local shouldDisable = not useDefault
+
+		if force or animate.Disabled ~= shouldDisable then
+			pcall(function()
+				animate.Disabled = shouldDisable
+			end)
+		end
 	end
 
 	if useDefault then
+		-- This prevents a finished emote from leaving stale joint offsets behind.
 		self:restorePoseBases()
 
-		if self.feAnimationsEnabled then
+		if self.feAnimationsEnabled
+			and (changed or next(self.feAnimationTracks) ~= nil)
+		then
 			self:stopFEAnimationMirrors()
 		end
 	else
-		self:stopNormalAnimationTracks()
+		if changed or force then
+			self:stopNormalAnimationTracks()
+		end
 
 		if changed and self.feAnimationsEnabled then
 			task.defer(function()
@@ -1728,6 +1752,11 @@ end
 
 function state:setCustomWalkAnimation(enabled)
 	self.customWalkAnimationEnabled = enabled == true
+	self:updateLocomotionAnimationPolicy(true)
+end
+
+function state:setCustomJumpAnimation(enabled)
+	self.customJumpAnimationEnabled = enabled == true
 	self:updateLocomotionAnimationPolicy(true)
 end
 
@@ -2859,15 +2888,17 @@ local function fireCommand(kind, value)
 
 		if isAction then
 			state.actionKeysHeld[normalized] = true
-			state.specialPoseUntil = os.clock() + 1.5
+			state.actionKeyDeadlines[normalized] = os.clock() + 1.75
+			state.specialPoseUntil = 0
 		end
 	elseif kind == "key_up" then
 		local _, normalized =
 			state:isNekoActionKey(value)
 
 		state.actionKeysHeld[normalized] = nil
-		state.specialPoseUntil =
-			math.max(state.specialPoseUntil, os.clock() + 0.35)
+		state.actionKeyDeadlines[normalized] = nil
+		state.specialPoseUntil = 0
+		state:updateLocomotionAnimationPolicy(true)
 	elseif kind == "mouse_down" then
 		state.primaryAttackHeld = true
 		state.punchPoseUntil = os.clock() + 1.5
@@ -2985,6 +3016,7 @@ local function cleanupShadow()
 	state.morphShirtGraphicTemplate = nil
 	table.clear(state.activeTouches)
 	table.clear(state.actionKeysHeld)
+	table.clear(state.actionKeyDeadlines)
 	state.primaryAttackHeld = false
 	state.punchPoseUntil = 0
 	state.specialPoseUntil = 0
@@ -6773,6 +6805,15 @@ function environment.CaelusPendalarNekoUI:Build()
 	)
 
 	settingsTab:NewBoolButton(
+		"Custom Jump Animation",
+		"OFF uses the normal R6 jump/freefall animation",
+		function(enabled)
+			state:setCustomJumpAnimation(enabled)
+		end,
+		state.customJumpAnimationEnabled
+	)
+
+	settingsTab:NewBoolButton(
 		"Custom Punch Animation",
 		"OFF keeps punching but removes the custom punch pose",
 		function(enabled)
@@ -6937,7 +6978,7 @@ function environment.CaelusPendalarNekoUI:Build()
 	self:FixTabScrolling(settingsTab)
 
 	window:SetMainTab(nekosTab)
-	window:SetFooter("Current Version : 3.32.8")
+	window:SetFooter("Current Version : 3.33.0")
 
 	self.Window = window
 
@@ -7019,7 +7060,9 @@ remember(UserInputService.InputBegan:Connect(function(input, gameProcessed)
 
 		if isAction then
 			state.actionKeysHeld[normalized] = true
-			state.specialPoseUntil = os.clock() + 1.5
+			state.actionKeyDeadlines[normalized] = math.huge
+			state.specialPoseUntil = 0
+			state:updateLocomotionAnimationPolicy(true)
 		end
 
 		return
@@ -7063,11 +7106,9 @@ remember(UserInputService.InputEnded:Connect(function(input)
 			state:isNekoActionKey(input.KeyCode.Name)
 
 		state.actionKeysHeld[normalized] = nil
-		state.specialPoseUntil =
-			math.max(
-				state.specialPoseUntil,
-				os.clock() + 0.35
-			)
+		state.actionKeyDeadlines[normalized] = nil
+		state.specialPoseUntil = 0
+		state:updateLocomotionAnimationPolicy(true)
 	end
 
 	if input.UserInputType == Enum.UserInputType.MouseButton1
