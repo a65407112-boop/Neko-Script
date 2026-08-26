@@ -14,7 +14,7 @@ local Debris = game:GetService("Debris")
 local HttpService = game:GetService("HttpService")
 
 local environment = (type(getgenv) == "function" and getgenv()) or _G
-local RUNTIME_VERSION = "3.33.0-animation-state-fix"
+local RUNTIME_VERSION = "3.33.1-game-animation-handoff"
 
 local function startupLog(message)
 	pcall(function()
@@ -1696,6 +1696,32 @@ function state:shouldUseDefaultLocomotionAnimation()
 	return self.customIdleAnimationEnabled ~= true
 end
 
+function state:updateControllerPunchMode()
+	local controller = self.controller
+
+	if not controller or not controller.Parent then
+		return
+	end
+
+	local punchingEnabled =
+		self.customPunchAnimationEnabled == true
+
+	local clawPunchEnabled =
+		punchingEnabled
+		and self.punchWithClawsEnabled == true
+		and self.clawsActive == true
+
+	controller:SetAttribute(
+		"CaelusPunchingEnabled",
+		punchingEnabled
+	)
+
+	controller:SetAttribute(
+		"CaelusPunchWithClaws",
+		clawPunchEnabled
+	)
+end
+
 function state:updateLocomotionAnimationPolicy(force)
 	local useDefault =
 		self:shouldUseDefaultLocomotionAnimation()
@@ -1707,9 +1733,18 @@ function state:updateLocomotionAnimationPolicy(force)
 
 	local animate = self.animateScript
 	if animate and animate.Parent then
-		local shouldDisable = not useDefault
+		local shouldDisable
 
-		if force or animate.Disabled ~= shouldDisable then
+		if useDefault then
+			-- Restore the game's original Animate state.  Some games replace
+			-- Animate or deliberately disable it and drive Animator tracks
+			-- themselves, so forcing Disabled=false would be incorrect.
+			shouldDisable = self.animateWasDisabled == true
+		else
+			shouldDisable = true
+		end
+
+		if force or changed or animate.Disabled ~= shouldDisable then
 			pcall(function()
 				animate.Disabled = shouldDisable
 			end)
@@ -1717,8 +1752,12 @@ function state:updateLocomotionAnimationPolicy(force)
 	end
 
 	if useDefault then
-		-- This prevents a finished emote from leaving stale joint offsets behind.
-		self:restorePoseBases()
+		-- Restore our joint basis only when ownership changes.  After this,
+		-- leave Motor6D.Transform alone so the game's Animate/custom Animator
+		-- can actually move the character.
+		if changed or force then
+			self:restorePoseBases()
+		end
 
 		if self.feAnimationsEnabled
 			and (changed or next(self.feAnimationTracks) ~= nil)
@@ -1761,20 +1800,20 @@ function state:setCustomJumpAnimation(enabled)
 end
 
 function state:setCustomPunchAnimation(enabled)
+	-- This setting now controls punching itself.  OFF means world clicks/taps
+	-- do not trigger ClickCombo at all.
 	self.customPunchAnimationEnabled = enabled == true
+	self.primaryAttackHeld = false
+	self.punchPoseUntil = 0
+	self:updateControllerPunchMode()
 	self:updateLocomotionAnimationPolicy(true)
 end
 
 function state:setPunchWithClaws(enabled)
+	-- This is a preference only.  The claw combo becomes effective when the
+	-- controller reports that the F/aggressive claws are actually out.
 	self.punchWithClawsEnabled = enabled == true
-
-	local controller = self.controller
-	if controller and controller.Parent then
-		controller:SetAttribute(
-			"CaelusPunchWithClaws",
-			self.punchWithClawsEnabled
-		)
-	end
+	self:updateControllerPunchMode()
 end
 
 function state:setFEAnimations(enabled)
@@ -2878,10 +2917,19 @@ function state:syncClawRunStateFromController()
 	self.clawsActive =
 		controller:GetAttribute("CaelusAggressive") == true
 
+	-- A claw punch is only allowed while the visible claw/aggressive stance
+	-- is actually active.  This prevents claw sounds/combos with hidden claws.
+	self:updateControllerPunchMode()
 	self:refreshClawRunSpeed()
 end
 
 local function fireCommand(kind, value)
+	if kind == "mouse_down"
+		and state.customPunchAnimationEnabled ~= true
+	then
+		return
+	end
+
 	if kind == "key_down" then
 		local isAction, normalized =
 			state:isNekoActionKey(value)
@@ -3347,6 +3395,13 @@ local function isolatedChunk(targetScript)
 	end
 
 	do
+		-- Punching OFF means no ClickCombo at all, not a frozen/neutral punch.
+		source = source:gsub(
+			"function%s+ClickCombo%s*%(%s*%)",
+			'function ClickCombo()\nif script:GetAttribute("CaelusPunchingEnabled") ~= true then return end',
+			1
+		)
+
 		local comboStart =
 			source:find("function ClickCombo", 1, true)
 
@@ -3578,9 +3633,10 @@ function environment.CaelusLegacyNekoConfig:createCustomShadow(name, realRoot)
 	controller.Name = "CaelusMelanieClientController"
 	controller:SetAttribute("CaelusSessionActive", true)
 	controller:SetAttribute(
-		"CaelusPunchWithClaws",
-		state.punchWithClawsEnabled
+		"CaelusPunchingEnabled",
+		state.customPunchAnimationEnabled
 	)
+	controller:SetAttribute("CaelusPunchWithClaws", false)
 	controller:SetAttribute("CaelusStartError", nil)
 	controller:SetAttribute("CaelusCustomController", true)
 	controller:SetAttribute("CaelusMelanieClientController", true)
@@ -5034,6 +5090,8 @@ local function applyMorph(versionName, morphName)
 	end
 
 	state.controller = controller
+	state:syncClawRunStateFromController()
+	state:updateControllerPunchMode()
 
 	if controller
 		and controller.Parent
@@ -5041,6 +5099,7 @@ local function applyMorph(versionName, morphName)
 	then
 		state.clawsActive =
 			controller:GetAttribute("CaelusAggressive") == true
+		state:updateControllerPunchMode()
 
 		rememberFollow(
 			controller:GetAttributeChangedSignal(
@@ -6814,8 +6873,8 @@ function environment.CaelusPendalarNekoUI:Build()
 	)
 
 	settingsTab:NewBoolButton(
-		"Custom Punch Animation",
-		"OFF keeps punching but removes the custom punch pose",
+		"Punching",
+		"OFF completely disables click/tap punching",
 		function(enabled)
 			state:setCustomPunchAnimation(enabled)
 		end,
@@ -6978,7 +7037,7 @@ function environment.CaelusPendalarNekoUI:Build()
 	self:FixTabScrolling(settingsTab)
 
 	window:SetMainTab(nekosTab)
-	window:SetFooter("Current Version : 3.33.0")
+	window:SetFooter("Current Version : 3.33.1")
 
 	self.Window = window
 
@@ -7078,6 +7137,10 @@ remember(UserInputService.InputBegan:Connect(function(input, gameProcessed)
 	end
 
 	if overInteractiveGui(input.Position) then
+		return
+	end
+
+	if state.customPunchAnimationEnabled ~= true then
 		return
 	end
 
