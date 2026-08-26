@@ -14,7 +14,7 @@ local Debris = game:GetService("Debris")
 local HttpService = game:GetService("HttpService")
 
 local environment = (type(getgenv) == "function" and getgenv()) or _G
-local RUNTIME_VERSION = "3.34.1-editor-parts-delete"
+local RUNTIME_VERSION = "3.34.3-stable-editor-color"
 
 local function startupLog(message)
 	pcall(function()
@@ -134,6 +134,7 @@ local CUSTOM_MORPH_NAME = "Custom Neko"
 local WHITE_NEKO_SOURCE_MORPH = "White neko"
 local DEFAULT_WHITE_NEKO_SKIN = Color3.fromRGB(255, 204, 153)
 local MAX_CUSTOM_ASSETS = 20
+local DEFAULT_CUSTOM_DETAIL_COLOR = BrickColor.new("Medium red").Color
 local CUSTOM_SKIN_PRESETS = {
 	{Name = "Porcelain", Color = Color3.fromRGB(255, 224, 189)},
 	{Name = "Light", Color = Color3.fromRGB(241, 194, 125)},
@@ -525,6 +526,7 @@ local state = {
 	editingPresetName = nil,
 	editingPresetPath = nil,
 	customDraftUse3DPants = true,
+	customDraftDetailColor = DEFAULT_CUSTOM_DETAIL_COLOR,
 	customDraftBeltParts = defaultCustomBeltParts(),
 	customDraftScarfParts = defaultCustomScarfParts(),
 	originalClawRunSpeedEnabled = false,
@@ -910,6 +912,11 @@ local function serializePreset(config)
 		},
 		assetIds = config.assetIds,
 		use3DPants = config.use3DPants ~= false,
+		detail = {
+			math.floor((config.detailColor or DEFAULT_CUSTOM_DETAIL_COLOR).R * 255 + 0.5),
+			math.floor((config.detailColor or DEFAULT_CUSTOM_DETAIL_COLOR).G * 255 + 0.5),
+			math.floor((config.detailColor or DEFAULT_CUSTOM_DETAIL_COLOR).B * 255 + 0.5),
+		},
 		beltParts = normalizePieceSelection(
 			config.beltParts,
 			CUSTOM_BELT_PIECE_NAMES
@@ -935,6 +942,21 @@ local function deserializePreset(data)
 	green = math.clamp(math.floor(green + 0.5), 0, 255)
 	blue = math.clamp(math.floor(blue + 0.5), 0, 255)
 
+	local detailColor = DEFAULT_CUSTOM_DETAIL_COLOR
+	if type(data.detail) == "table" then
+		local detailRed = tonumber(data.detail[1])
+		local detailGreen = tonumber(data.detail[2])
+		local detailBlue = tonumber(data.detail[3])
+
+		if detailRed and detailGreen and detailBlue then
+			detailColor = Color3.fromRGB(
+				math.clamp(math.floor(detailRed + 0.5), 0, 255),
+				math.clamp(math.floor(detailGreen + 0.5), 0, 255),
+				math.clamp(math.floor(detailBlue + 0.5), 0, 255)
+			)
+		end
+	end
+
 	local assetIds = {}
 	local seen = {}
 	if type(data.assetIds) == "table" then
@@ -954,6 +976,7 @@ local function deserializePreset(data)
 		skinColor = Color3.fromRGB(red, green, blue),
 		assetIds = assetIds,
 		use3DPants = data.use3DPants ~= false,
+		detailColor = detailColor,
 		beltParts = normalizePieceSelection(
 			data.beltParts,
 			CUSTOM_BELT_PIECE_NAMES
@@ -1173,6 +1196,7 @@ local function copyCustomConfig(config)
 		skinColor = config.skinColor,
 		assetIds = assetIds,
 		use3DPants = config.use3DPants ~= false,
+		detailColor = config.detailColor or DEFAULT_CUSTOM_DETAIL_COLOR,
 		beltParts = copyPieceSelection(
 			config.beltParts,
 			CUSTOM_BELT_PIECE_NAMES
@@ -2753,6 +2777,8 @@ end))
 local function openCustomPanel(config, editingPreset)
 	local saved = config and copyCustomConfig(config) or nil
 	customDraftSkinColor = saved and saved.skinColor or DEFAULT_WHITE_NEKO_SKIN
+	state.customDraftDetailColor =
+		saved and saved.detailColor or DEFAULT_CUSTOM_DETAIL_COLOR
 	customDraftVersion = saved and saved.version or state.selectedVersion or "V4"
 	state.customDraftUse3DPants = not saved or saved.use3DPants ~= false
 	state.customDraftBeltParts = copyPieceSelection(
@@ -2856,6 +2882,8 @@ remember(saveCustomButton.Activated:Connect(function()
 		name = name,
 		version = validVersion(customDraftVersion) and customDraftVersion or "V4",
 		skinColor = customDraftSkinColor,
+		detailColor =
+			state.customDraftDetailColor or DEFAULT_CUSTOM_DETAIL_COLOR,
 		assetIds = assetIds,
 		use3DPants = state.customDraftUse3DPants,
 		beltParts = copyPieceSelection(
@@ -4379,6 +4407,14 @@ local function lowerBeltPieceColor(name)
 		return lowerBodySkinColor()
 	end
 
+	if state.activeMorph == CUSTOM_MORPH_NAME
+		and state.activeCustomNeko
+		and typeof(state.activeCustomNeko.detailColor) == "Color3"
+		and (name == "BeltLayer" or name == "BeltBack")
+	then
+		return state.activeCustomNeko.detailColor
+	end
+
 	local legacyConfig = state.activeLegacyNeko
 		and environment.CaelusLegacyNekoConfig.variants[state.activeLegacyNeko]
 	if legacyConfig
@@ -4743,10 +4779,22 @@ local function rebuildOriginalLowerBaseWear(shadow)
 		model:SetAttribute("CaelusSourceVariant", variant)
 		if state.activeMorph == CUSTOM_MORPH_NAME and state.activeCustomNeko then
 			local skinColor = state.activeCustomNeko.skinColor
+			local detailColor =
+				state.activeCustomNeko.detailColor
+				or DEFAULT_CUSTOM_DETAIL_COLOR
+
 			recolorMatchingParts(model, DEFAULT_WHITE_NEKO_SKIN, skinColor)
+
 			local beltShell = model:FindFirstChild("BeltShell")
 			if beltShell and beltShell:IsA("BasePart") then
 				beltShell.Color = skinColor
+			end
+
+			for index = 1, 4 do
+				local panel = model:FindFirstChild("BeltPanel" .. tostring(index))
+				if panel and panel:IsA("BasePart") then
+					panel.Color = detailColor
+				end
 			end
 		end
 		local reference = model:FindFirstChild("Reference")
@@ -4958,7 +5006,32 @@ local function rebuildOriginalUpperScarf(shadow)
 	model.Name = "CaelusUpperScarf"
 	model:SetAttribute("CaelusSourceVariant", variant)
 	if state.activeMorph == CUSTOM_MORPH_NAME and state.activeCustomNeko then
-		recolorMatchingParts(model, DEFAULT_WHITE_NEKO_SKIN, state.activeCustomNeko.skinColor)
+		local detailColor =
+			state.activeCustomNeko.detailColor
+			or DEFAULT_CUSTOM_DETAIL_COLOR
+
+		recolorMatchingParts(
+			model,
+			DEFAULT_WHITE_NEKO_SKIN,
+			state.activeCustomNeko.skinColor
+		)
+
+		-- These are the supplied scarf's accent/detail source colors.
+		recolorMatchingParts(
+			model,
+			Color3.fromRGB(232, 186, 200),
+			detailColor
+		)
+		recolorMatchingParts(
+			model,
+			BrickColor.new("Medium red").Color,
+			detailColor
+		)
+		recolorMatchingParts(
+			model,
+			BrickColor.new("Dusty Rose").Color,
+			detailColor
+		)
 	elseif state.activeLegacyNeko and typeof(state.activeLegacySkinColor) == "Color3" then
 		recolorMatchingParts(model, DEFAULT_WHITE_NEKO_SKIN, state.activeLegacySkinColor)
 
@@ -5584,6 +5657,21 @@ function environment.CaelusNekoAPI:Apply(morphName, versionName)
 end
 
 function environment.CaelusNekoAPI:ShowMenu()
+	local pendalarUI = environment.CaelusPendalarNekoUI
+
+	if type(pendalarUI) == "table"
+		and pendalarUI.GuiRoot
+		and pendalarUI.GuiRoot.Parent
+	then
+		pendalarUI.GuiRoot.Enabled = true
+
+		if gui and gui.Parent then
+			gui.Enabled = false
+		end
+
+		return
+	end
+
 	if gui and gui.Parent then
 		gui.Enabled = true
 	end
@@ -5638,7 +5726,8 @@ function environment.CaelusNekoAPI:SaveCustom(
 	use3DPants,
 	previousName,
 	beltParts,
-	scarfParts
+	scarfParts,
+	detailColor
 )
 	local normalizedName, nameProblem = normalizePresetName(name)
 
@@ -5648,6 +5737,14 @@ function environment.CaelusNekoAPI:SaveCustom(
 
 	if typeof(skinColor) ~= "Color3" then
 		return false, "Skin color must be Color3."
+	end
+
+	if typeof(detailColor) ~= "Color3" then
+		detailColor =
+			(previousName
+				and state.savedPresets[previousName]
+				and state.savedPresets[previousName].detailColor)
+			or DEFAULT_CUSTOM_DETAIL_COLOR
 	end
 
 	if not validVersion(versionName) then
@@ -5681,6 +5778,7 @@ function environment.CaelusNekoAPI:SaveCustom(
 		name = normalizedName,
 		version = versionName,
 		skinColor = skinColor,
+		detailColor = detailColor,
 		assetIds = assetIds,
 		use3DPants = use3DPants ~= false,
 		beltParts = normalizePieceSelection(
@@ -5900,6 +5998,7 @@ environment.CaelusPendalarNekoUI = {
 	VersionLabel = nil,
 	EditorStatus = nil,
 	EditorSkinColor = DEFAULT_WHITE_NEKO_SKIN,
+	EditorDetailColor = DEFAULT_CUSTOM_DETAIL_COLOR,
 	EditorUse3DPants = true,
 	EditorPreviousName = nil,
 	EditorBeltParts = defaultCustomBeltParts(),
@@ -5909,6 +6008,7 @@ environment.CaelusPendalarNekoUI = {
 		scarf = {},
 	},
 	Editor3DPantsButton = nil,
+	DetailColorPicker = nil,
 	DeletePendingName = nil,
 	DeletePendingDeadline = 0,
 	NekosTab = nil,
@@ -6442,6 +6542,7 @@ function environment.CaelusPendalarNekoUI:CreateColorPicker(tab)
 
 	self.ColorPicker = {
 		Holder = holder,
+		Title = title,
 		SV = sv,
 		Hue = hue,
 		Preview = preview,
@@ -6449,6 +6550,7 @@ function environment.CaelusPendalarNekoUI:CreateColorPicker(tab)
 		H = 0.08,
 		S = 0.35,
 		V = 1,
+		Target = "skin",
 	}
 
 	function self.ColorPicker:SetColor(color)
@@ -6469,8 +6571,31 @@ function environment.CaelusPendalarNekoUI:CreateColorPicker(tab)
 			math.floor(color.B * 255 + 0.5)
 		)
 
-		environment.CaelusPendalarNekoUI.EditorSkinColor =
-			color
+		if self.Target == "detail" then
+			environment.CaelusPendalarNekoUI.EditorDetailColor =
+				color
+		else
+			environment.CaelusPendalarNekoUI.EditorSkinColor =
+				color
+		end
+	end
+
+	function self.ColorPicker:SetTarget(target)
+		if target == "detail" then
+			self.Target = "detail"
+			self.Title.Text = "Detail color"
+			self:SetColor(
+				environment.CaelusPendalarNekoUI.EditorDetailColor
+					or DEFAULT_CUSTOM_DETAIL_COLOR
+			)
+		else
+			self.Target = "skin"
+			self.Title.Text = "Skin Color"
+			self:SetColor(
+				environment.CaelusPendalarNekoUI.EditorSkinColor
+					or DEFAULT_WHITE_NEKO_SKIN
+			)
+		end
 	end
 
 	function self.ColorPicker:UpdateSV(position)
@@ -6554,12 +6679,200 @@ function environment.CaelusPendalarNekoUI:CreateColorPicker(tab)
 		end
 	end)
 
-	self.ColorPicker:SetColor(self.EditorSkinColor)
+	self.ColorPicker:SetTarget("skin")
 	scrollingFrame.CanvasSize =
 		UDim2.fromOffset(
 			scrollingFrame.CanvasSize.X.Offset,
 			scrollingFrame.CanvasSize.Y.Offset + 215
 		)
+end
+
+function environment.CaelusPendalarNekoUI:CreateDetailColorPicker(tab)
+	local scrollingFrame =
+		tab.Tab:FindFirstChildOfClass("ScrollingFrame")
+
+	if not scrollingFrame then
+		return
+	end
+
+	local holder = Instance.new("Frame")
+	holder.Name = "DetailColorPicker"
+	holder.Size = UDim2.fromOffset(385, 205)
+	holder.BackgroundColor3 = Color3.fromRGB(194, 73, 115)
+	holder.BorderSizePixel = 0
+	holder.Parent = scrollingFrame
+	Instance.new("UICorner", holder).CornerRadius = UDim.new(0, 5)
+
+	local title = Instance.new("TextLabel")
+	title.BackgroundTransparency = 1
+	title.Position = UDim2.fromOffset(12, 7)
+	title.Size = UDim2.new(1, -24, 0, 24)
+	title.Font = Enum.Font.Roboto
+	title.Text = "Detail color"
+	title.TextColor3 = Color3.new(1, 1, 1)
+	title.TextSize = 17
+	title.TextXAlignment = Enum.TextXAlignment.Left
+	title.Parent = holder
+
+	local sv = Instance.new("ImageButton")
+	sv.Name = "SaturationValue"
+	sv.AutoButtonColor = false
+	sv.Position = UDim2.fromOffset(12, 38)
+	sv.Size = UDim2.fromOffset(300, 120)
+	sv.BorderSizePixel = 0
+	sv.BackgroundColor3 = Color3.fromHSV(0, 1, 1)
+	sv.Image = "rbxassetid://4155801252"
+	sv.Parent = holder
+	Instance.new("UICorner", sv).CornerRadius = UDim.new(0, 4)
+
+	local hue = Instance.new("ImageButton")
+	hue.Name = "Hue"
+	hue.AutoButtonColor = false
+	hue.Position = UDim2.fromOffset(324, 38)
+	hue.Size = UDim2.fromOffset(48, 120)
+	hue.BorderSizePixel = 0
+	hue.Parent = holder
+	Instance.new("UICorner", hue).CornerRadius = UDim.new(0, 4)
+
+	local hueGradient = Instance.new("UIGradient")
+	hueGradient.Rotation = 90
+	hueGradient.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0.00, Color3.fromHSV(0.00, 1, 1)),
+		ColorSequenceKeypoint.new(0.17, Color3.fromHSV(0.17, 1, 1)),
+		ColorSequenceKeypoint.new(0.33, Color3.fromHSV(0.33, 1, 1)),
+		ColorSequenceKeypoint.new(0.50, Color3.fromHSV(0.50, 1, 1)),
+		ColorSequenceKeypoint.new(0.67, Color3.fromHSV(0.67, 1, 1)),
+		ColorSequenceKeypoint.new(0.83, Color3.fromHSV(0.83, 1, 1)),
+		ColorSequenceKeypoint.new(1.00, Color3.fromHSV(1.00, 1, 1)),
+	})
+	hueGradient.Parent = hue
+
+	local preview = Instance.new("Frame")
+	preview.Name = "Preview"
+	preview.Position = UDim2.fromOffset(12, 168)
+	preview.Size = UDim2.fromOffset(34, 25)
+	preview.BorderSizePixel = 0
+	preview.Parent = holder
+	Instance.new("UICorner", preview).CornerRadius = UDim.new(0, 4)
+
+	local colorText = Instance.new("TextLabel")
+	colorText.BackgroundTransparency = 1
+	colorText.Position = UDim2.fromOffset(55, 165)
+	colorText.Size = UDim2.new(1, -67, 0, 30)
+	colorText.Font = Enum.Font.Roboto
+	colorText.TextColor3 = Color3.new(1, 1, 1)
+	colorText.TextSize = 14
+	colorText.TextXAlignment = Enum.TextXAlignment.Left
+	colorText.Parent = holder
+
+	self.DetailColorPicker = {
+		Holder = holder,
+		SV = sv,
+		Hue = hue,
+		Preview = preview,
+		Text = colorText,
+		H = 0,
+		S = 1,
+		V = 1,
+	}
+
+	function self.DetailColorPicker:SetColor(color)
+		local h, s, v = color:ToHSV()
+		self.H = h
+		self.S = s
+		self.V = v
+		sv.BackgroundColor3 = Color3.fromHSV(h, 1, 1)
+		preview.BackgroundColor3 = color
+
+		colorText.Text = string.format(
+			"#%02X%02X%02X   RGB %d, %d, %d",
+			math.floor(color.R * 255 + 0.5),
+			math.floor(color.G * 255 + 0.5),
+			math.floor(color.B * 255 + 0.5),
+			math.floor(color.R * 255 + 0.5),
+			math.floor(color.G * 255 + 0.5),
+			math.floor(color.B * 255 + 0.5)
+		)
+
+		environment.CaelusPendalarNekoUI.EditorDetailColor =
+			color
+	end
+
+	function self.DetailColorPicker:UpdateSV(position)
+		local x = math.clamp(
+			(position.X - sv.AbsolutePosition.X)
+				/ math.max(sv.AbsoluteSize.X, 1),
+			0,
+			1
+		)
+		local y = math.clamp(
+			(position.Y - sv.AbsolutePosition.Y)
+				/ math.max(sv.AbsoluteSize.Y, 1),
+			0,
+			1
+		)
+
+		self.S = x
+		self.V = 1 - y
+		self:SetColor(Color3.fromHSV(self.H, self.S, self.V))
+	end
+
+	function self.DetailColorPicker:UpdateHue(position)
+		local y = math.clamp(
+			(position.Y - hue.AbsolutePosition.Y)
+				/ math.max(hue.AbsoluteSize.Y, 1),
+			0,
+			1
+		)
+
+		self.H = y
+		sv.BackgroundColor3 = Color3.fromHSV(self.H, 1, 1)
+		self:SetColor(Color3.fromHSV(self.H, self.S, self.V))
+	end
+
+	local svDragging = false
+	local hueDragging = false
+
+	sv.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1
+			or input.UserInputType == Enum.UserInputType.Touch
+		then
+			svDragging = true
+			self.DetailColorPicker:UpdateSV(input.Position)
+		end
+	end)
+
+	hue.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1
+			or input.UserInputType == Enum.UserInputType.Touch
+		then
+			hueDragging = true
+			self.DetailColorPicker:UpdateHue(input.Position)
+		end
+	end)
+
+	UserInputService.InputChanged:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseMovement
+			or input.UserInputType == Enum.UserInputType.Touch
+		then
+			if svDragging then
+				self.DetailColorPicker:UpdateSV(input.Position)
+			elseif hueDragging then
+				self.DetailColorPicker:UpdateHue(input.Position)
+			end
+		end
+	end)
+
+	UserInputService.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1
+			or input.UserInputType == Enum.UserInputType.Touch
+		then
+			svDragging = false
+			hueDragging = false
+		end
+	end)
+
+	self.DetailColorPicker:SetColor(self.EditorDetailColor)
 end
 
 function environment.CaelusPendalarNekoUI:IsEditorBeltPartAvailable(name)
@@ -6712,9 +7025,13 @@ function environment.CaelusPendalarNekoUI:LoadEditorConfig(config)
 	self.EditorAssets.Text = table.concat(ids, ", ")
 	self.EditorSkinColor =
 		config.skinColor or DEFAULT_WHITE_NEKO_SKIN
+	self.EditorDetailColor =
+		config.detailColor or DEFAULT_CUSTOM_DETAIL_COLOR
 
 	if self.ColorPicker then
-		self.ColorPicker:SetColor(self.EditorSkinColor)
+		self.ColorPicker:SetTarget(
+			self.ColorPicker.Target or "skin"
+		)
 	end
 
 	self:RefreshEditorPieceControls()
@@ -6739,7 +7056,8 @@ function environment.CaelusPendalarNekoUI:SaveEditor()
 		self.EditorUse3DPants,
 		self.EditorPreviousName,
 		self.EditorBeltParts,
-		self.EditorScarfParts
+		self.EditorScarfParts,
+		self.EditorDetailColor
 	)
 
 	if not ok then
@@ -6788,6 +7106,14 @@ function environment.CaelusPendalarNekoUI:DeleteEditorSelection()
 	self.EditorAssets.Text = ""
 	self.EditorBeltParts = defaultCustomBeltParts()
 	self.EditorScarfParts = defaultCustomScarfParts()
+	self.EditorDetailColor = DEFAULT_CUSTOM_DETAIL_COLOR
+
+	if self.ColorPicker then
+		self.ColorPicker:SetTarget(
+			self.ColorPicker.Target or "skin"
+		)
+	end
+
 	self:RefreshEditorPieceControls()
 	self.EditorStatus.Text = "Deleted : " .. tostring(name)
 end
@@ -7230,7 +7556,7 @@ function environment.CaelusPendalarNekoUI:CreateEditorPieceControls(editorTab)
 		self:RefreshEditorPieceControls()
 	end)
 
-	makeHeader("Belt Pieces", 30000)
+	makeHeader("Belt Piece Visibility", 30000)
 
 	local beltLabels = {
 		BeltBase = "Belt Base (V3/V4)",
@@ -7255,7 +7581,7 @@ function environment.CaelusPendalarNekoUI:CreateEditorPieceControls(editorTab)
 		)
 	end
 
-	makeHeader("Scarf Pieces", 30100)
+	makeHeader("Scarf Piece Visibility", 30100)
 
 	for index, name in ipairs(CUSTOM_SCARF_PIECE_NAMES) do
 		makeToggle(
@@ -7281,6 +7607,10 @@ function environment.CaelusPendalarNekoUI:Build()
 
 	self.BuildStarted = true
 	self:DestroyExistingWindow()
+
+	environment.CaelusNekoBootStatus(
+		"Caelus Neko: loading Pendalar UI..."
+	)
 
 	local sourceText, fetchProblem = self:Fetch(self.LibraryUrl)
 
@@ -7361,6 +7691,10 @@ function environment.CaelusPendalarNekoUI:Build()
 			end
 		end
 	end
+
+	environment.CaelusNekoBootStatus(
+		"Caelus Neko: building Pendalar tabs..."
+	)
 
 	local window = library:New("Pendalar Hub")
 	self.GuiRoot = self:FindCreatedGui(guiBefore, "Pendalar Hub")
@@ -7611,7 +7945,31 @@ function environment.CaelusPendalarNekoUI:Build()
 		"Editor Version : " .. self.EditorVersion
 	)
 
+	environment.CaelusNekoBootStatus(
+		"Caelus Neko: building Neko Editor..."
+	)
+
 	self:CreateColorPicker(editorTab)
+
+	editorTab:NewButton(
+		"Skin Color",
+		"Use the color picker for the Neko skin",
+		function()
+			if self.ColorPicker then
+				self.ColorPicker:SetTarget("skin")
+			end
+		end
+	)
+
+	editorTab:NewButton(
+		"Detail color",
+		"Use one shared color for belt and scarf details",
+		function()
+			if self.ColorPicker then
+				self.ColorPicker:SetTarget("detail")
+			end
+		end
+	)
 
 	editorTab:NewButton(
 		"Load Selected",
@@ -7694,7 +8052,7 @@ function environment.CaelusPendalarNekoUI:Build()
 	self:FixTabScrolling(settingsTab)
 
 	window:SetMainTab(nekosTab)
-	window:SetFooter("Current Version : 3.34.1")
+	window:SetFooter("Current Version : 3.34.3")
 
 	self.Window = window
 
@@ -7705,8 +8063,22 @@ function environment.CaelusPendalarNekoUI:Build()
 	return true
 end
 
-state.pendalarUiOk, state.pendalarUiProblem =
-	state.pendalarUI:Build()
+do
+	local callOk, buildOk, buildProblem =
+		pcall(function()
+			return state.pendalarUI:Build()
+		end)
+
+	if callOk then
+		state.pendalarUiOk = buildOk == true
+		state.pendalarUiProblem = buildProblem
+	else
+		state.pendalarUiOk = false
+		state.pendalarUiProblem =
+			"Pendalar build runtime error: "
+			.. tostring(buildOk)
+	end
+end
 
 if not state.pendalarUiOk
 	and environment.CaelusNekoHubLaunchToken
@@ -7747,8 +8119,29 @@ if not state.pendalarUiOk then
 	)
 
 	if gui and gui.Parent then
-		gui.Enabled = true
+		gui.Enabled = false
 	end
+
+	if type(environment.CaelusNekoBootStatus) == "function" then
+		environment.CaelusNekoBootStatus(
+			"Pendalar UI failed: " .. tostring(state.pendalarUiProblem),
+			true
+		)
+	end
+end
+
+if state.pendalarUiOk and gui and gui.Parent then
+	gui.Enabled = false
+
+	remember(gui:GetPropertyChangedSignal("Enabled"):Connect(function()
+		if not state.destroyed
+			and state.pendalarUiOk
+			and gui.Parent
+			and gui.Enabled
+		then
+			gui.Enabled = false
+		end
+	end))
 end
 
 local function overInteractiveGui(position)
