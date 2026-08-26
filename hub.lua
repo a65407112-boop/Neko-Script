@@ -14,7 +14,7 @@ local Debris = game:GetService("Debris")
 local HttpService = game:GetService("HttpService")
 
 local environment = (type(getgenv) == "function" and getgenv()) or _G
-local RUNTIME_VERSION = "3.33.1-game-animation-handoff"
+local RUNTIME_VERSION = "3.34.1-editor-parts-delete"
 
 local function startupLog(message)
 	pcall(function()
@@ -144,6 +144,48 @@ local CUSTOM_SKIN_PRESETS = {
 	{Name = "Neko", Color = DEFAULT_WHITE_NEKO_SKIN},
 	{Name = "Pale", Color = Color3.fromRGB(248, 248, 248)},
 }
+
+local CUSTOM_BELT_PIECE_NAMES = {
+	"BeltBase",
+	"BeltLayer",
+	"BeltBack",
+	"BeltCover",
+	"BeltShell",
+	"BeltPanel1",
+	"BeltPanel2",
+	"BeltPanel3",
+	"BeltPanel4",
+	"RearAccessoryRight",
+	"RearAccessoryLeft",
+}
+
+local CUSTOM_SCARF_PIECE_NAMES = {}
+for index = 1, 10 do
+	CUSTOM_SCARF_PIECE_NAMES[index] = "Scarf" .. tostring(index)
+end
+
+local function normalizePieceSelection(selection, names)
+	local result = {}
+
+	for _, name in ipairs(names) do
+		result[name] = type(selection) ~= "table"
+			or selection[name] ~= false
+	end
+
+	return result
+end
+
+local function copyPieceSelection(selection, names)
+	return normalizePieceSelection(selection, names)
+end
+
+local function defaultCustomBeltParts()
+	return normalizePieceSelection(nil, CUSTOM_BELT_PIECE_NAMES)
+end
+
+local function defaultCustomScarfParts()
+	return normalizePieceSelection(nil, CUSTOM_SCARF_PIECE_NAMES)
+end
 
 local function fail(message)
 	if type(environment.CaelusNekoBootStatus) == "function" then
@@ -483,6 +525,8 @@ local state = {
 	editingPresetName = nil,
 	editingPresetPath = nil,
 	customDraftUse3DPants = true,
+	customDraftBeltParts = defaultCustomBeltParts(),
+	customDraftScarfParts = defaultCustomScarfParts(),
 	originalClawRunSpeedEnabled = false,
 	customIdleAnimationEnabled = true,
 	customWalkAnimationEnabled = true,
@@ -866,6 +910,14 @@ local function serializePreset(config)
 		},
 		assetIds = config.assetIds,
 		use3DPants = config.use3DPants ~= false,
+		beltParts = normalizePieceSelection(
+			config.beltParts,
+			CUSTOM_BELT_PIECE_NAMES
+		),
+		scarfParts = normalizePieceSelection(
+			config.scarfParts,
+			CUSTOM_SCARF_PIECE_NAMES
+		),
 	}
 end
 
@@ -902,6 +954,14 @@ local function deserializePreset(data)
 		skinColor = Color3.fromRGB(red, green, blue),
 		assetIds = assetIds,
 		use3DPants = data.use3DPants ~= false,
+		beltParts = normalizePieceSelection(
+			data.beltParts,
+			CUSTOM_BELT_PIECE_NAMES
+		),
+		scarfParts = normalizePieceSelection(
+			data.scarfParts,
+			CUSTOM_SCARF_PIECE_NAMES
+		),
 	}
 end
 
@@ -1113,6 +1173,14 @@ local function copyCustomConfig(config)
 		skinColor = config.skinColor,
 		assetIds = assetIds,
 		use3DPants = config.use3DPants ~= false,
+		beltParts = copyPieceSelection(
+			config.beltParts,
+			CUSTOM_BELT_PIECE_NAMES
+		),
+		scarfParts = copyPieceSelection(
+			config.scarfParts,
+			CUSTOM_SCARF_PIECE_NAMES
+		),
 	}
 end
 
@@ -2687,6 +2755,14 @@ local function openCustomPanel(config, editingPreset)
 	customDraftSkinColor = saved and saved.skinColor or DEFAULT_WHITE_NEKO_SKIN
 	customDraftVersion = saved and saved.version or state.selectedVersion or "V4"
 	state.customDraftUse3DPants = not saved or saved.use3DPants ~= false
+	state.customDraftBeltParts = copyPieceSelection(
+		saved and saved.beltParts,
+		CUSTOM_BELT_PIECE_NAMES
+	)
+	state.customDraftScarfParts = copyPieceSelection(
+		saved and saved.scarfParts,
+		CUSTOM_SCARF_PIECE_NAMES
+	)
 	customNameBox.Text = saved and saved.name or ""
 
 	if saved then
@@ -2782,6 +2858,14 @@ remember(saveCustomButton.Activated:Connect(function()
 		skinColor = customDraftSkinColor,
 		assetIds = assetIds,
 		use3DPants = state.customDraftUse3DPants,
+		beltParts = copyPieceSelection(
+			state.customDraftBeltParts,
+			CUSTOM_BELT_PIECE_NAMES
+		),
+		scarfParts = copyPieceSelection(
+			state.customDraftScarfParts,
+			CUSTOM_SCARF_PIECE_NAMES
+		),
 	}
 
 	local previousName = state.editingPresetName
@@ -4107,9 +4191,24 @@ function state.clothingGuard:uses3DPants()
 	)
 end
 
-function state.clothingGuard:apply(character, className, nekoTemplate, armorOn, keep2D)
+function state.clothingGuard:apply(
+	character,
+	className,
+	nekoTemplate,
+	armorOn,
+	keep2D,
+	forceHidden
+)
 	if not character then return end
-	local desired = self.priority[className]
+
+	local desired
+
+	if forceHidden then
+		desired = ARMOR_OFF_TEMPLATE
+	else
+		desired = self.priority[className]
+	end
+
 	if desired == nil then
 		if keep2D then
 			desired = nekoTemplate or ""
@@ -4335,6 +4434,22 @@ end
 local ensureOriginalLowerBaseWear
 local ensureOriginalUpperScarf
 
+local function customWearPartEnabled(kind, partName)
+	if state.activeMorph ~= CUSTOM_MORPH_NAME
+		or not state.activeCustomNeko
+	then
+		return true
+	end
+
+	local selection =
+		kind == "belt"
+			and state.activeCustomNeko.beltParts
+			or state.activeCustomNeko.scarfParts
+
+	return type(selection) ~= "table"
+		or selection[partName] ~= false
+end
+
 local function setWearBindingsVisible(bindings, visible)
 	local applied = 0
 	for _, binding in ipairs(bindings) do
@@ -4346,7 +4461,11 @@ local function setWearBindingsVisible(bindings, visible)
 			-- Source scarf pieces start at Transparency=1; the original V code
 			-- reveals them later.  Their stored value is therefore not their
 			-- visible value.  Force every replacement garment opaque when active.
-			part.Transparency = visible and 0 or 1
+			local partVisible =
+				visible
+				and customWearPartEnabled("scarf", part.Name)
+
+			part.Transparency = partVisible and 0 or 1
 			pcall(function() part.LocalTransparencyModifier = 0 end)
 			applied = applied + 1
 		end
@@ -4363,9 +4482,16 @@ local function setLowerBaseWearVisible(visible)
 			part.Anchored = true
 			part.CFrame = anchor.CFrame * binding.relative
 			local partVisible = visible
-			if state.activeVersion == "V5" and part:GetAttribute("CaelusBeltPiece") == true then
+			if state.activeVersion == "V5"
+				and part:GetAttribute("CaelusBeltPiece") == true
+			then
 				partVisible = true
 			end
+
+			partVisible =
+				partVisible
+				and customWearPartEnabled("belt", part.Name)
+
 			part.Transparency = partVisible and 0 or 1
 			pcall(function() part.LocalTransparencyModifier = 0 end)
 			applied = applied + 1
@@ -4395,7 +4521,8 @@ local function enforceHiddenArmor()
 				"Pants",
 				state.morphPantsTemplate,
 				false,
-				not use3DPants
+				false,
+				true
 			)
 		end
 		if not state.upperArmorOn then
@@ -4489,7 +4616,8 @@ local function updateArmor(kind, explicitArmorOn)
 			"Pants",
 			state.morphPantsTemplate,
 			state.lowerArmorOn,
-			not use3DPants
+			(not use3DPants) and state.lowerArmorOn,
+			(not state.lowerArmorOn)
 		)
 		setArmorPartsVisible(state.lowerArmorParts, state.lowerArmorOn and use3DPants)
 		ensureOriginalLowerBaseWear(shadow, not state.lowerArmorOn)
@@ -5071,6 +5199,14 @@ local function applyMorph(versionName, morphName)
 			skinColor = state.customNeko.skinColor,
 			assetIds = assetIds,
 			use3DPants = state.customNeko.use3DPants ~= false,
+			beltParts = copyPieceSelection(
+				state.customNeko.beltParts,
+				CUSTOM_BELT_PIECE_NAMES
+			),
+			scarfParts = copyPieceSelection(
+				state.customNeko.scarfParts,
+				CUSTOM_SCARF_PIECE_NAMES
+			),
 		}
 	else
 		state.activeCustomNeko = nil
@@ -5500,7 +5636,9 @@ function environment.CaelusNekoAPI:SaveCustom(
 	skinColor,
 	assetText,
 	use3DPants,
-	previousName
+	previousName,
+	beltParts,
+	scarfParts
 )
 	local normalizedName, nameProblem = normalizePresetName(name)
 
@@ -5532,9 +5670,11 @@ function environment.CaelusNekoAPI:SaveCustom(
 	end
 
 	local previousPath
+	local previousPreset
 
 	if previousName and state.savedPresets[previousName] then
-		previousPath = state.savedPresets[previousName].filePath
+		previousPreset = state.savedPresets[previousName]
+		previousPath = previousPreset.filePath
 	end
 
 	local config = {
@@ -5543,6 +5683,16 @@ function environment.CaelusNekoAPI:SaveCustom(
 		skinColor = skinColor,
 		assetIds = assetIds,
 		use3DPants = use3DPants ~= false,
+		beltParts = normalizePieceSelection(
+			beltParts
+				or (previousPreset and previousPreset.beltParts),
+			CUSTOM_BELT_PIECE_NAMES
+		),
+		scarfParts = normalizePieceSelection(
+			scarfParts
+				or (previousPreset and previousPreset.scarfParts),
+			CUSTOM_SCARF_PIECE_NAMES
+		),
 	}
 
 	local exported, exportResult =
@@ -5571,6 +5721,80 @@ function environment.CaelusNekoAPI:SaveCustom(
 	state.selectedVersion = versionName
 	selectedText.Text = normalizedName
 	selectedValue.Value = CUSTOM_MORPH_NAME
+
+	local pendalarUI = environment.CaelusPendalarNekoUI
+	if type(pendalarUI) == "table"
+		and type(pendalarUI.RefreshSavedNekos) == "function"
+	then
+		task.defer(function()
+			if not state.destroyed then
+				pendalarUI:RefreshSavedNekos()
+			end
+		end)
+	end
+
+	return true, normalizedName
+end
+
+function environment.CaelusNekoAPI:DeleteCustom(name)
+	local normalizedName, nameProblem =
+		normalizePresetName(name)
+
+	if not normalizedName then
+		return false, nameProblem
+	end
+
+	local preset = state.savedPresets[normalizedName]
+	if not preset then
+		return false, "Saved Custom Neko not found: " .. normalizedName
+	end
+
+	local path = preset.filePath
+
+	if type(path) == "string" and path ~= "" then
+		if not FILE_API.delfile then
+			return false,
+				"This executor cannot delete saved preset files."
+		end
+
+		local shouldDelete = true
+
+		if FILE_API.isfile then
+			local existsOk, exists =
+				pcall(FILE_API.isfile, path)
+
+			if existsOk and not exists then
+				shouldDelete = false
+			end
+		end
+
+		if shouldDelete then
+			local deleteOk, deleteProblem =
+				pcall(FILE_API.delfile, path)
+
+			if not deleteOk then
+				return false,
+					"Could not delete preset file: "
+						.. tostring(deleteProblem)
+			end
+		end
+	end
+
+	state.savedPresets[normalizedName] = nil
+	FILE_API.writePresetIndex()
+	refreshPresetButtons()
+
+	if state.customNeko
+		and state.customNeko.name == normalizedName
+	then
+		state.customNeko = nil
+
+		if state.selectedMorph == CUSTOM_MORPH_NAME then
+			state.selectedMorph = nil
+			selectedText.Text = "None"
+			selectedValue.Value = ""
+		end
+	end
 
 	local pendalarUI = environment.CaelusPendalarNekoUI
 	if type(pendalarUI) == "table"
@@ -5678,8 +5902,18 @@ environment.CaelusPendalarNekoUI = {
 	EditorSkinColor = DEFAULT_WHITE_NEKO_SKIN,
 	EditorUse3DPants = true,
 	EditorPreviousName = nil,
+	EditorBeltParts = defaultCustomBeltParts(),
+	EditorScarfParts = defaultCustomScarfParts(),
+	EditorPieceButtons = {
+		belt = {},
+		scarf = {},
+	},
+	Editor3DPantsButton = nil,
+	DeletePendingName = nil,
+	DeletePendingDeadline = 0,
 	NekosTab = nil,
 	SettingsTab = nil,
+	EditorTab = nil,
 	SavedNekoButtons = {},
 	ScrollFixConnections = {},
 	AttackFlingEnabled = false,
@@ -6328,19 +6562,146 @@ function environment.CaelusPendalarNekoUI:CreateColorPicker(tab)
 		)
 end
 
-function environment.CaelusPendalarNekoUI:LoadEditorSelection()
-	local config = environment.CaelusNekoAPI:GetSelectedCustom()
+function environment.CaelusPendalarNekoUI:IsEditorBeltPartAvailable(name)
+	local versionName = self.EditorVersion or "V4"
 
-	if not config then
+	if versionName == "V5" then
+		return name == "BeltShell"
+			or name == "BeltPanel1"
+			or name == "BeltPanel2"
+			or name == "BeltPanel3"
+			or name == "BeltPanel4"
+			or name == "RearAccessoryRight"
+			or name == "RearAccessoryLeft"
+	end
+
+	return name == "BeltBase"
+		or name == "BeltLayer"
+		or name == "BeltBack"
+		or name == "BeltCover"
+		or name == "RearAccessoryRight"
+		or name == "RearAccessoryLeft"
+end
+
+function environment.CaelusPendalarNekoUI:IsEditorScarfPartAvailable(name)
+	local index = tonumber(tostring(name):match("^Scarf(%d+)$"))
+	if not index then
+		return false
+	end
+
+	local limit =
+		(self.EditorVersion or "V4") == "V5"
+			and 10
+			or 8
+
+	return index <= limit
+end
+
+function environment.CaelusPendalarNekoUI:SetEditorPieceButtonVisual(
+	button,
+	enabled,
+	available
+)
+	if not button or not button.Parent then
+		return
+	end
+
+	local status = button:FindFirstChild("status")
+
+	if not available then
+		button.BackgroundColor3 =
+			Color3.fromRGB(95, 64, 76)
+		button.TextTransparency = 0.4
+
+		if status then
+			status.Text = "N/A"
+			status.TextColor3 =
+				Color3.fromRGB(195, 175, 183)
+		end
+
+		return
+	end
+
+	button.TextTransparency = 0
+	button.BackgroundColor3 =
+		enabled
+			and Color3.fromRGB(194, 73, 115)
+			or Color3.fromRGB(105, 48, 70)
+
+	if status then
+		status.Text = enabled and "ON" or "OFF"
+		status.TextColor3 =
+			enabled
+				and Color3.fromRGB(170, 255, 190)
+				or Color3.fromRGB(255, 170, 180)
+	end
+end
+
+function environment.CaelusPendalarNekoUI:RefreshEditorPieceControls()
+	if self.Editor3DPantsButton then
+		self:SetEditorPieceButtonVisual(
+			self.Editor3DPantsButton,
+			self.EditorUse3DPants ~= false,
+			true
+		)
+	end
+
+	for name, button in pairs(self.EditorPieceButtons.belt or {}) do
+		self:SetEditorPieceButtonVisual(
+			button,
+			self.EditorBeltParts[name] ~= false,
+			self:IsEditorBeltPartAvailable(name)
+		)
+	end
+
+	for name, button in pairs(self.EditorPieceButtons.scarf or {}) do
+		self:SetEditorPieceButtonVisual(
+			button,
+			self.EditorScarfParts[name] ~= false,
+			self:IsEditorScarfPartAvailable(name)
+		)
+	end
+end
+
+function environment.CaelusPendalarNekoUI:ShowEditorTab()
+	local tab = self.EditorTab
+	local tabFrame = tab and tab.Tab
+
+	if not tabFrame or not tabFrame.Parent then
+		return
+	end
+
+	for _, child in ipairs(tabFrame.Parent:GetChildren()) do
+		if child:IsA("Frame")
+			and child ~= tabFrame
+			and child.Name ~= "tab buttons"
+		then
+			child.Visible = false
+		end
+	end
+
+	tabFrame.Visible = true
+end
+
+function environment.CaelusPendalarNekoUI:LoadEditorConfig(config)
+	if type(config) ~= "table" then
 		self.EditorStatus.Text =
 			"Select a saved Custom Neko first."
-		return
+		return false
 	end
 
 	self.EditorPreviousName = config.name
 	self.EditorName.Text = config.name or ""
 	self.EditorVersion = config.version or "V4"
 	self.EditorUse3DPants = config.use3DPants ~= false
+	self.EditorBeltParts = copyPieceSelection(
+		config.beltParts,
+		CUSTOM_BELT_PIECE_NAMES
+	)
+	self.EditorScarfParts = copyPieceSelection(
+		config.scarfParts,
+		CUSTOM_SCARF_PIECE_NAMES
+	)
 
 	local ids = {}
 
@@ -6356,8 +6717,17 @@ function environment.CaelusPendalarNekoUI:LoadEditorSelection()
 		self.ColorPicker:SetColor(self.EditorSkinColor)
 	end
 
+	self:RefreshEditorPieceControls()
+
 	self.EditorStatus.Text =
-		"Loaded : " .. tostring(config.name)
+		"Editing : " .. tostring(config.name)
+
+	return true
+end
+
+function environment.CaelusPendalarNekoUI:LoadEditorSelection()
+	local config = environment.CaelusNekoAPI:GetSelectedCustom()
+	return self:LoadEditorConfig(config)
 end
 
 function environment.CaelusPendalarNekoUI:SaveEditor()
@@ -6367,7 +6737,9 @@ function environment.CaelusPendalarNekoUI:SaveEditor()
 		self.EditorSkinColor,
 		self.EditorAssets:GetText(),
 		self.EditorUse3DPants,
-		self.EditorPreviousName
+		self.EditorPreviousName,
+		self.EditorBeltParts,
+		self.EditorScarfParts
 	)
 
 	if not ok then
@@ -6377,6 +6749,47 @@ function environment.CaelusPendalarNekoUI:SaveEditor()
 
 	self.EditorPreviousName = result
 	self.EditorStatus.Text = "Saved : " .. tostring(result)
+end
+
+function environment.CaelusPendalarNekoUI:DeleteEditorSelection()
+	local name = self.EditorPreviousName
+
+	if not name or name == "" then
+		self.EditorStatus.Text =
+			"Load a saved Custom Neko first."
+		return
+	end
+
+	local now = os.clock()
+
+	if self.DeletePendingName ~= name
+		or now > (self.DeletePendingDeadline or 0)
+	then
+		self.DeletePendingName = name
+		self.DeletePendingDeadline = now + 4
+		self.EditorStatus.Text =
+			"Press Delete Selected again to confirm: " .. name
+		return
+	end
+
+	self.DeletePendingName = nil
+	self.DeletePendingDeadline = 0
+
+	local deleted, problem =
+		environment.CaelusNekoAPI:DeleteCustom(name)
+
+	if not deleted then
+		self.EditorStatus.Text = tostring(problem)
+		return
+	end
+
+	self.EditorPreviousName = nil
+	self.EditorName.Text = ""
+	self.EditorAssets.Text = ""
+	self.EditorBeltParts = defaultCustomBeltParts()
+	self.EditorScarfParts = defaultCustomScarfParts()
+	self:RefreshEditorPieceControls()
+	self.EditorStatus.Text = "Deleted : " .. tostring(name)
 end
 
 function environment.CaelusPendalarNekoUI:FixTabScrolling(tab)
@@ -6490,62 +6903,8 @@ function environment.CaelusPendalarNekoUI:RefreshSavedNekos()
 		return
 	end
 
-	for _, preset in ipairs(orderedSavedPresets()) do
-		local presetName = tostring(preset.name)
-		local buttonName = "★ " .. presetName
-
-		tab:NewButton(
-			buttonName,
-			"Apply saved Custom Neko • "
-				.. tostring(preset.version or "V4"),
-			function()
-				local current =
-					state.savedPresets[presetName]
-
-				if type(current) ~= "table" then
-					warn(
-						"[Pendalar Hub] Saved Custom Neko not found: "
-							.. presetName
-					)
-					return
-				end
-
-				state.customNeko =
-					copyCustomConfig(current)
-				state.selectedMorph =
-					CUSTOM_MORPH_NAME
-				state.selectedVersion =
-					current.version
-					or state.selectedVersion
-					or "V4"
-
-				selectedText.Text = presetName
-				selectedValue.Value =
-					CUSTOM_MORPH_NAME
-
-				if self.VersionLabel then
-					self.VersionLabel.Text =
-						"Selected Neko Version : "
-							.. tostring(
-								state.selectedVersion
-							)
-				end
-
-				local applied, problem =
-					environment.CaelusNekoAPI
-						:ApplySelectedCustom()
-
-				if not applied then
-					warn(
-						"[Pendalar Hub] "
-							.. tostring(problem)
-					)
-				end
-			end
-		)
-
-		local button =
-			scrollingFrame:FindFirstChild(buttonName)
+	local function trackCreatedButton(buttonName)
+		local button = scrollingFrame:FindFirstChild(buttonName)
 
 		if button and button:IsA("GuiButton") then
 			button:SetAttribute(
@@ -6553,11 +6912,137 @@ function environment.CaelusPendalarNekoUI:RefreshSavedNekos()
 				true
 			)
 
-			table.insert(
-				self.SavedNekoButtons,
-				button
-			)
+			table.insert(self.SavedNekoButtons, button)
 		end
+
+		return button
+	end
+
+	local function selectPreset(presetName)
+		local current = state.savedPresets[presetName]
+
+		if type(current) ~= "table" then
+			return nil,
+				"Saved Custom Neko not found: " .. presetName
+		end
+
+		state.customNeko = copyCustomConfig(current)
+		state.selectedMorph = CUSTOM_MORPH_NAME
+		state.selectedVersion =
+			current.version
+			or state.selectedVersion
+			or "V4"
+
+		selectedText.Text = presetName
+		selectedValue.Value = CUSTOM_MORPH_NAME
+
+		if self.VersionLabel then
+			self.VersionLabel.Text =
+				"Selected Neko Version : "
+					.. tostring(state.selectedVersion)
+		end
+
+		return current
+	end
+
+	for _, preset in ipairs(orderedSavedPresets()) do
+		local presetName = tostring(preset.name)
+
+		local applyName = "★ " .. presetName
+		tab:NewButton(
+			applyName,
+			"Apply saved Custom Neko • "
+				.. tostring(preset.version or "V4"),
+			function()
+				local current, problem = selectPreset(presetName)
+
+				if not current then
+					warn("[Pendalar Hub] " .. tostring(problem))
+					return
+				end
+
+				local applied, applyProblem =
+					environment.CaelusNekoAPI:ApplySelectedCustom()
+
+				if not applied then
+					warn(
+						"[Pendalar Hub] "
+							.. tostring(applyProblem)
+					)
+				end
+			end
+		)
+		trackCreatedButton(applyName)
+
+		local editName = "✎ Edit " .. presetName
+		tab:NewButton(
+			editName,
+			"Open this Custom Neko in the editor",
+			function()
+				local current, problem = selectPreset(presetName)
+
+				if not current then
+					warn("[Pendalar Hub] " .. tostring(problem))
+					return
+				end
+
+				self:LoadEditorConfig(current)
+
+				self:ShowEditorTab()
+			end
+		)
+		trackCreatedButton(editName)
+
+		local deleteName = "🗑 Delete " .. presetName
+		tab:NewButton(
+			deleteName,
+			"Click twice within 4 seconds to delete this saved Neko",
+			function()
+				local now = os.clock()
+
+				if self.DeletePendingName ~= presetName
+					or now > (self.DeletePendingDeadline or 0)
+				then
+					self.DeletePendingName = presetName
+					self.DeletePendingDeadline = now + 4
+
+					local button =
+						scrollingFrame:FindFirstChild(deleteName)
+
+					if button and button:IsA("TextButton") then
+						button.Text =
+							"⚠ Confirm Delete " .. presetName
+					end
+
+					task.delay(4.1, function()
+						if self.DeletePendingName == presetName then
+							self.DeletePendingName = nil
+							self.DeletePendingDeadline = 0
+
+							local button =
+								scrollingFrame:FindFirstChild(deleteName)
+
+							if button and button:IsA("TextButton") then
+								button.Text = deleteName
+							end
+						end
+					end)
+
+					return
+				end
+
+				self.DeletePendingName = nil
+				self.DeletePendingDeadline = 0
+
+				local deleted, problem =
+					environment.CaelusNekoAPI:DeleteCustom(presetName)
+
+				if not deleted then
+					warn("[Pendalar Hub] " .. tostring(problem))
+				end
+			end
+		)
+		trackCreatedButton(deleteName)
 	end
 
 	self:FixTabScrolling(tab)
@@ -6617,6 +7102,172 @@ function environment.CaelusPendalarNekoUI:FindCreatedGui(
 	end
 
 	return nil
+end
+
+function environment.CaelusPendalarNekoUI:CreateEditorPieceControls(editorTab)
+	local scrollingFrame =
+		editorTab.Tab:FindFirstChildOfClass("ScrollingFrame")
+
+	if not scrollingFrame then
+		return
+	end
+
+	for _, child in ipairs(scrollingFrame:GetChildren()) do
+		if child:GetAttribute("CaelusEditorPieceControl") == true then
+			child:Destroy()
+		end
+	end
+
+	self.EditorPieceButtons = {
+		belt = {},
+		scarf = {},
+	}
+
+	local function makeHeader(text, order)
+		local label = Instance.new("TextLabel")
+		label.Name = text
+		label.LayoutOrder = order
+		label.Size = UDim2.fromOffset(385, 30)
+		label.BackgroundColor3 = Color3.fromRGB(137, 43, 79)
+		label.BorderSizePixel = 0
+		label.Font = Enum.Font.RobotoBold
+		label.Text = text
+		label.TextColor3 = Color3.new(1, 1, 1)
+		label.TextSize = 14
+		label:SetAttribute("CaelusEditorPieceControl", true)
+		label.Parent = scrollingFrame
+
+		local corner = Instance.new("UICorner")
+		corner.CornerRadius = UDim.new(0, 5)
+		corner.Parent = label
+	end
+
+	local function makeToggle(group, name, labelText, order)
+		local button = Instance.new("TextButton")
+		button.Name = "Piece_" .. name
+		button.LayoutOrder = order
+		button.Size = UDim2.fromOffset(385, 34)
+		button.BackgroundColor3 = Color3.fromRGB(194, 73, 115)
+		button.BorderSizePixel = 0
+		button.AutoButtonColor = false
+		button.Font = Enum.Font.Roboto
+		button.Text = "   " .. labelText
+		button.TextColor3 = Color3.new(1, 1, 1)
+		button.TextSize = 14
+		button.TextXAlignment = Enum.TextXAlignment.Left
+		button:SetAttribute("CaelusEditorPieceControl", true)
+		button.Parent = scrollingFrame
+
+		local corner = Instance.new("UICorner")
+		corner.CornerRadius = UDim.new(0, 5)
+		corner.Parent = button
+
+		local status = Instance.new("TextLabel")
+		status.Name = "status"
+		status.BackgroundTransparency = 1
+		status.Position = UDim2.new(1, -52, 0, 0)
+		status.Size = UDim2.fromOffset(42, 34)
+		status.Font = Enum.Font.RobotoBold
+		status.TextSize = 11
+		status.TextXAlignment = Enum.TextXAlignment.Right
+		status.Parent = button
+
+		self.EditorPieceButtons[group][name] = button
+
+		button.MouseButton1Click:Connect(function()
+			local available =
+				group == "belt"
+					and self:IsEditorBeltPartAvailable(name)
+					or self:IsEditorScarfPartAvailable(name)
+
+			if not available then
+				return
+			end
+
+			local selection =
+				group == "belt"
+					and self.EditorBeltParts
+					or self.EditorScarfParts
+
+			selection[name] = selection[name] == false
+			self:RefreshEditorPieceControls()
+		end)
+	end
+
+	local pantsButton = Instance.new("TextButton")
+	pantsButton.Name = "Editor_3D_Pants"
+	pantsButton.LayoutOrder = 29990
+	pantsButton.Size = UDim2.fromOffset(385, 39)
+	pantsButton.BackgroundColor3 = Color3.fromRGB(194, 73, 115)
+	pantsButton.BorderSizePixel = 0
+	pantsButton.AutoButtonColor = false
+	pantsButton.Font = Enum.Font.RobotoBold
+	pantsButton.Text = "   3D Pants"
+	pantsButton.TextColor3 = Color3.new(1, 1, 1)
+	pantsButton.TextSize = 15
+	pantsButton.TextXAlignment = Enum.TextXAlignment.Left
+	pantsButton:SetAttribute("CaelusEditorPieceControl", true)
+	pantsButton.Parent = scrollingFrame
+
+	local pantsCorner = Instance.new("UICorner")
+	pantsCorner.CornerRadius = UDim.new(0, 5)
+	pantsCorner.Parent = pantsButton
+
+	local pantsStatus = Instance.new("TextLabel")
+	pantsStatus.Name = "status"
+	pantsStatus.BackgroundTransparency = 1
+	pantsStatus.Position = UDim2.new(1, -52, 0, 0)
+	pantsStatus.Size = UDim2.fromOffset(42, 39)
+	pantsStatus.Font = Enum.Font.RobotoBold
+	pantsStatus.TextSize = 11
+	pantsStatus.TextXAlignment = Enum.TextXAlignment.Right
+	pantsStatus.Parent = pantsButton
+
+	self.Editor3DPantsButton = pantsButton
+
+	pantsButton.MouseButton1Click:Connect(function()
+		self.EditorUse3DPants = self.EditorUse3DPants == false
+		self:RefreshEditorPieceControls()
+	end)
+
+	makeHeader("Belt Pieces", 30000)
+
+	local beltLabels = {
+		BeltBase = "Belt Base (V3/V4)",
+		BeltLayer = "Belt Layer (V3/V4)",
+		BeltBack = "Belt Back (V3/V4)",
+		BeltCover = "Belt Cover (V3/V4)",
+		BeltShell = "Belt Shell (V5)",
+		BeltPanel1 = "Belt Panel 1 (V5)",
+		BeltPanel2 = "Belt Panel 2 (V5)",
+		BeltPanel3 = "Belt Panel 3 (V5)",
+		BeltPanel4 = "Belt Panel 4 (V5)",
+		RearAccessoryRight = "Rear Pocket Right",
+		RearAccessoryLeft = "Rear Pocket Left",
+	}
+
+	for index, name in ipairs(CUSTOM_BELT_PIECE_NAMES) do
+		makeToggle(
+			"belt",
+			name,
+			beltLabels[name] or name,
+			30000 + index
+		)
+	end
+
+	makeHeader("Scarf Pieces", 30100)
+
+	for index, name in ipairs(CUSTOM_SCARF_PIECE_NAMES) do
+		makeToggle(
+			"scarf",
+			name,
+			"Scarf Segment " .. tostring(index),
+			30100 + index
+		)
+	end
+
+	self:RefreshEditorPieceControls()
+	self:FixTabScrolling(editorTab)
 end
 
 function environment.CaelusPendalarNekoUI:Build()
@@ -6730,6 +7381,7 @@ function environment.CaelusPendalarNekoUI:Build()
 
 	self.NekosTab = nekosTab
 	self.SettingsTab = settingsTab
+	self.EditorTab = editorTab
 	self.ScriptsTab = scriptsTab
 	self.SavedNekoButtons = {}
 
@@ -6948,17 +7600,12 @@ function environment.CaelusPendalarNekoUI:Build()
 
 			self.EditorStatus.Text =
 				"Editor Version : " .. self.EditorVersion
+
+			self:RefreshEditorPieceControls()
 		end
 	)
 
-	editorTab:NewBoolButton(
-		"3D Pants",
-		"Show generated 3D lower-body geometry",
-		function(enabled)
-			self.EditorUse3DPants = enabled
-		end,
-		true
-	)
+	self.EditorUse3DPants = true
 
 	self.EditorStatus = editorTab:NewLabel(
 		"Editor Version : " .. self.EditorVersion
@@ -6994,6 +7641,16 @@ function environment.CaelusPendalarNekoUI:Build()
 			end
 		end
 	)
+
+	editorTab:NewButton(
+		"Delete Selected",
+		"Press twice within 4 seconds to permanently delete this saved Neko",
+		function()
+			self:DeleteEditorSelection()
+		end
+	)
+
+	self:CreateEditorPieceControls(editorTab)
 
 	scriptsTab:NewLabel("Pendalar Scripts")
 
@@ -7037,7 +7694,7 @@ function environment.CaelusPendalarNekoUI:Build()
 	self:FixTabScrolling(settingsTab)
 
 	window:SetMainTab(nekosTab)
-	window:SetFooter("Current Version : 3.33.1")
+	window:SetFooter("Current Version : 3.34.1")
 
 	self.Window = window
 
