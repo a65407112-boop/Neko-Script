@@ -14,7 +14,7 @@ local Debris = game:GetService("Debris")
 local HttpService = game:GetService("HttpService")
 
 local environment = (type(getgenv) == "function" and getgenv()) or _G
-local RUNTIME_VERSION = "3.34.4-editor-regression-fix"
+local RUNTIME_VERSION = "3.34.5-editor-startup-fix"
 
 local function startupLog(message)
 	pcall(function()
@@ -6970,7 +6970,12 @@ function environment.CaelusPendalarNekoUI:RefreshEditorPieceControls()
 		)
 	end
 
-	for name, button in pairs(self.EditorPieceButtons.belt or {}) do
+	local pieceButtons = self.EditorPieceButtons or {
+		belt = {},
+		scarf = {},
+	}
+
+	for name, button in pairs(pieceButtons.belt or {}) do
 		self:SetEditorPieceButtonVisual(
 			button,
 			self.EditorBeltParts[name] ~= false,
@@ -6978,7 +6983,7 @@ function environment.CaelusPendalarNekoUI:RefreshEditorPieceControls()
 		)
 	end
 
-	for name, button in pairs(self.EditorPieceButtons.scarf or {}) do
+	for name, button in pairs(pieceButtons.scarf or {}) do
 		self:SetEditorPieceButtonVisual(
 			button,
 			self.EditorScarfParts[name] ~= false,
@@ -7513,7 +7518,10 @@ function environment.CaelusPendalarNekoUI:CreateEditorPieceControls(editorTab)
 	end
 
 	for _, child in ipairs(scrollingFrame:GetChildren()) do
-		if child:GetAttribute("CaelusEditorPieceControl") == true then
+		if child:GetAttribute("CaelusEditorPieceControl") == true
+			and child ~= self.Editor3DPantsButton
+			and child.Name ~= "Editor_3D_Pants"
+		then
 			child:Destroy()
 		end
 	end
@@ -7735,6 +7743,7 @@ function environment.CaelusPendalarNekoUI:Build()
 	)
 
 	local window = library:New("Pendalar Hub")
+	self.Window = window
 	self.GuiRoot = self:FindCreatedGui(guiBefore, "Pendalar Hub")
 
 	if not self.GuiRoot then
@@ -8099,7 +8108,7 @@ function environment.CaelusPendalarNekoUI:Build()
 	self:FixTabScrolling(creditsTab)
 
 	window:SetMainTab(nekosTab)
-	window:SetFooter("Current Version : 3.34.4")
+	window:SetFooter("Current Version : 3.34.5")
 
 	self.Window = window
 
@@ -8166,7 +8175,7 @@ if not state.pendalarUiOk then
 	)
 
 	if gui and gui.Parent then
-		gui.Enabled = false
+		gui.Enabled = true
 	end
 
 	if type(environment.CaelusNekoBootStatus) == "function" then
