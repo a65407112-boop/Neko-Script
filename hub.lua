@@ -14,7 +14,7 @@ local Debris = game:GetService("Debris")
 local HttpService = game:GetService("HttpService")
 
 local environment = (type(getgenv) == "function" and getgenv()) or _G
-local RUNTIME_VERSION = "3.34.6-stable-editor-rebuild"
+local RUNTIME_VERSION = "3.34.7-minimal-safe-repair"
 
 local function startupLog(message)
 	pcall(function()
@@ -7527,6 +7527,42 @@ function environment.CaelusPendalarNekoUI:CreateEditorPieceControls(editorTab)
 		end)
 	end
 
+	local pantsButton = Instance.new("TextButton")
+	pantsButton.Name = "Editor_3D_Pants"
+	pantsButton.LayoutOrder = -5000
+	pantsButton.Size = UDim2.fromOffset(385, 39)
+	pantsButton.BackgroundColor3 = Color3.fromRGB(194, 73, 115)
+	pantsButton.BorderSizePixel = 0
+	pantsButton.AutoButtonColor = false
+	pantsButton.Font = Enum.Font.RobotoBold
+	pantsButton.Text = "   3D Pants"
+	pantsButton.TextColor3 = Color3.new(1, 1, 1)
+	pantsButton.TextSize = 15
+	pantsButton.TextXAlignment = Enum.TextXAlignment.Left
+	pantsButton:SetAttribute("CaelusEditorPieceControl", true)
+	pantsButton.Parent = scrollingFrame
+
+	local pantsCorner = Instance.new("UICorner")
+	pantsCorner.CornerRadius = UDim.new(0, 5)
+	pantsCorner.Parent = pantsButton
+
+	local pantsStatus = Instance.new("TextLabel")
+	pantsStatus.Name = "status"
+	pantsStatus.BackgroundTransparency = 1
+	pantsStatus.Position = UDim2.new(1, -52, 0, 0)
+	pantsStatus.Size = UDim2.fromOffset(42, 39)
+	pantsStatus.Font = Enum.Font.RobotoBold
+	pantsStatus.TextSize = 11
+	pantsStatus.TextXAlignment = Enum.TextXAlignment.Right
+	pantsStatus.Parent = pantsButton
+
+	self.Editor3DPantsButton = pantsButton
+
+	pantsButton.MouseButton1Click:Connect(function()
+		self.EditorUse3DPants = self.EditorUse3DPants == false
+		self:RefreshEditorPieceControls()
+	end)
+
 	makeHeader("Belt Piece Visibility", 30000)
 
 	local beltLabels = {
@@ -7912,15 +7948,6 @@ function environment.CaelusPendalarNekoUI:Build()
 
 	self.EditorUse3DPants = true
 
-	editorTab:NewBoolButton(
-		"3D Pants",
-		"Show generated 3D lower-body geometry",
-		function(enabled)
-			self.EditorUse3DPants = enabled == true
-		end,
-		self.EditorUse3DPants ~= false
-	)
-
 	self.EditorStatus = editorTab:NewLabel(
 		"Editor Version : " .. self.EditorVersion
 	)
@@ -8030,12 +8057,9 @@ function environment.CaelusPendalarNekoUI:Build()
 
 	self:FixTabScrolling(nekosTab)
 	self:FixTabScrolling(settingsTab)
-	self:FixTabScrolling(editorTab)
-	self:FixTabScrolling(scriptsTab)
-	self:FixTabScrolling(creditsTab)
 
 	window:SetMainTab(nekosTab)
-	window:SetFooter("Current Version : 3.34.6")
+	window:SetFooter("Current Version : 3.34.7")
 
 	self.Window = window
 
