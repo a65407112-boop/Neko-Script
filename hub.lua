@@ -14,7 +14,7 @@ local Debris = game:GetService("Debris")
 local HttpService = game:GetService("HttpService")
 
 local environment = (type(getgenv) == "function" and getgenv()) or _G
-local RUNTIME_VERSION = "3.36.0-safe-addon"
+local RUNTIME_VERSION = "3.36.1-scroll-audio-fix"
 
 local function startupLog(message)
 	pcall(function()
@@ -2654,6 +2654,37 @@ function state:refreshClawRunSpeed()
 	end
 end
 
+-- Reliable local claw-toggle audio. The original Neko controllers can lose
+-- their Sound parenting when they are transplanted into the client shadow rig,
+-- so use Roblox's bundled sword sounds as a permission-free fallback.
+function state:playClawToggleSound(opening)
+	local now = os.clock()
+	if self.lastClawSoundAt and now - self.lastClawSoundAt < 0.18 then
+		return
+	end
+	self.lastClawSoundAt = now
+
+	local soundService = game:GetService("SoundService")
+	local sound = Instance.new("Sound")
+	sound.Name = "CaelusClawToggleSound"
+	sound.SoundId = opening == false
+		and "rbxasset://sounds/swordslash.wav"
+		or "rbxasset://sounds/unsheath.wav"
+	sound.Volume = 1.35
+	sound.PlaybackSpeed = opening == false and 0.88 or 1.05
+	sound.Parent = soundService
+
+	local played = pcall(function()
+		soundService:PlayLocalSound(sound)
+	end)
+	if not played then
+		pcall(function()
+			sound:Play()
+		end)
+	end
+	Debris:AddItem(sound, 4)
+end
+
 function state:syncClawRunStateFromController()
 	local controller = self.controller
 
@@ -2670,6 +2701,10 @@ function state:syncClawRunStateFromController()
 end
 
 local function fireCommand(kind, value)
+	if kind == "key_down" and string.lower(tostring(value or "")) == "f" and state.activeMorph then
+		state:playClawToggleSound(not state.clawsActive)
+	end
+
 	local command = state.command
 
 	if command
@@ -6974,48 +7009,91 @@ function addon:TabScroll(name)
 	return tab and tab:FindFirstChildOfClass("ScrollingFrame")
 end
 
-function addon:FixScroll(name)
-	local scrollingFrame = self:TabScroll(name)
-	if not scrollingFrame then
+function addon:RefreshScrollingFrame(scrollingFrame)
+	if not scrollingFrame
+		or not scrollingFrame.Parent
+		or not scrollingFrame:IsA("ScrollingFrame")
+	then
 		return
-	end
-
-	local layout = scrollingFrame:FindFirstChildOfClass("UIListLayout")
-	if not layout then
-		return
-	end
-
-	local old = self.ScrollConnections[scrollingFrame]
-	if old then
-		pcall(function()
-			old:Disconnect()
-		end)
 	end
 
 	scrollingFrame.Active = true
 	scrollingFrame.ScrollingEnabled = true
 	scrollingFrame.ScrollingDirection = Enum.ScrollingDirection.Y
 	scrollingFrame.AutomaticCanvasSize = Enum.AutomaticSize.None
-
-	local function update()
-		task.defer(function()
-			if not scrollingFrame.Parent or not layout.Parent then
-				return
-			end
-
-			local height = math.max(
-				math.ceil(layout.AbsoluteContentSize.Y) + 72,
-				math.ceil(scrollingFrame.AbsoluteSize.Y) + 1
-			)
-
-			scrollingFrame.CanvasSize = UDim2.fromOffset(0, height)
-		end)
+	if scrollingFrame.ScrollBarThickness < 5 then
+		scrollingFrame.ScrollBarThickness = 6
 	end
 
-	self.ScrollConnections[scrollingFrame] =
-		layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(update)
+	-- AbsoluteContentSize is best when Pendalar uses a UIListLayout. We also
+	-- measure every direct GuiObject so custom rows (Detail color, FE toggle,
+	-- future controls, etc.) cannot fall outside the scrollable area.
+	local contentBottom = 0
+	local layout = scrollingFrame:FindFirstChildOfClass("UIListLayout")
+	if layout then
+		contentBottom = math.max(contentBottom, layout.AbsoluteContentSize.Y)
+	end
 
-	update()
+	local canvasY = scrollingFrame.CanvasPosition.Y
+	local frameTop = scrollingFrame.AbsolutePosition.Y
+	for _, child in ipairs(scrollingFrame:GetChildren()) do
+		if child:IsA("GuiObject") and child.Visible then
+			local contentY =
+				(child.AbsolutePosition.Y - frameTop)
+				+ canvasY
+			local bottom = contentY + child.AbsoluteSize.Y
+			contentBottom = math.max(contentBottom, bottom)
+		end
+	end
+
+	local padding = scrollingFrame:FindFirstChildOfClass("UIPadding")
+	local bottomPadding = 0
+	if padding then
+		bottomPadding =
+			padding.PaddingBottom.Offset
+			+ padding.PaddingBottom.Scale * scrollingFrame.AbsoluteSize.Y
+	end
+
+	local height = math.max(
+		math.ceil(contentBottom + bottomPadding + 44),
+		math.ceil(scrollingFrame.AbsoluteSize.Y) + 1
+	)
+
+	local old = scrollingFrame.CanvasSize
+	if math.abs(old.Y.Offset - height) > 1
+		or old.Y.Scale ~= 0
+		or old.X.Scale ~= 0
+	then
+		scrollingFrame.CanvasSize = UDim2.fromOffset(0, height)
+	end
+end
+
+function addon:FixScroll(name)
+	local scrollingFrame = self:TabScroll(name)
+	if scrollingFrame then
+		self:RefreshScrollingFrame(scrollingFrame)
+	end
+end
+
+function addon:FixAllScrolls()
+	local roots = {}
+	if ui.GuiRoot and ui.GuiRoot.Parent then
+		table.insert(roots, ui.GuiRoot)
+	end
+	if gui and gui.Parent and gui ~= ui.GuiRoot then
+		table.insert(roots, gui)
+	end
+
+	for _, root in ipairs(roots) do
+		if root:IsA("ScrollingFrame") then
+			self:RefreshScrollingFrame(root)
+		end
+		for _, object in ipairs(root:GetDescendants()) do
+			if object:IsA("ScrollingFrame") then
+				self:RefreshScrollingFrame(object)
+			end
+		end
+	end
 end
 
 function addon:Corner(parent, radius)
@@ -7965,6 +8043,10 @@ function addon:InstallInputTracking()
 
 			if input.UserInputType == Enum.UserInputType.Keyboard then
 				local keyName = string.upper(input.KeyCode.Name)
+
+				if keyName == "F" and state.activeMorph then
+					state:playClawToggleSound(not state.clawsActive)
+				end
 				local keys =
 					environment.CaelusLegacyNekoConfig
 					and environment.CaelusLegacyNekoConfig.variants
@@ -8063,6 +8145,8 @@ function addon:Install()
 	}) do
 		self:FixScroll(name)
 	end
+	self:FixAllScrolls()
+	self.LastScrollRefresh = 0
 
 	if gui and gui.Parent then
 		gui.Enabled = false
@@ -8088,6 +8172,15 @@ function addon:Install()
 		self:UpdateControllerCombat()
 		self:Force2DPantsState()
 		self:ApplyCurrentVisualDetails()
+
+		-- Pendalar adds/removes rows dynamically. Re-measure every scrolling
+		-- frame a few times per second so Settings, Editor, Scripts, Credits,
+		-- and future tabs can always reach their actual last control.
+		local now = os.clock()
+		if now - (self.LastScrollRefresh or 0) >= 0.35 then
+			self.LastScrollRefresh = now
+			self:FixAllScrolls()
+		end
 	end))
 
 	print("[Caelus Neko] Safe feature addon active.")
