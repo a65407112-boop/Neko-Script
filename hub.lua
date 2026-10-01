@@ -14,7 +14,7 @@ local Debris = game:GetService("Debris")
 local HttpService = game:GetService("HttpService")
 
 local environment = (type(getgenv) == "function" and getgenv()) or _G
-local RUNTIME_VERSION = "3.36.1-scroll-audio-fix"
+local RUNTIME_VERSION = "3.36.2-ui-input-fix"
 
 local function startupLog(message)
 	pcall(function()
@@ -7076,23 +7076,16 @@ function addon:FixScroll(name)
 end
 
 function addon:FixAllScrolls()
-	local roots = {}
-	if ui.GuiRoot and ui.GuiRoot.Parent then
-		table.insert(roots, ui.GuiRoot)
-	end
-	if gui and gui.Parent and gui ~= ui.GuiRoot then
-		table.insert(roots, gui)
-	end
-
-	for _, root in ipairs(roots) do
-		if root:IsA("ScrollingFrame") then
-			self:RefreshScrollingFrame(root)
-		end
-		for _, object in ipairs(root:GetDescendants()) do
-			if object:IsA("ScrollingFrame") then
-				self:RefreshScrollingFrame(object)
-			end
-		end
+	-- Only manage Pendalar's main tab scrolls. Touching every nested
+	-- ScrollingFrame can corrupt grids, pickers and future custom widgets.
+	for _, name in ipairs({
+		"Nekos",
+		"Settings",
+		"Neko Editor",
+		"Scripts",
+		"Credits",
+	}) do
+		self:FixScroll(name)
 	end
 end
 
@@ -7107,7 +7100,7 @@ function addon:MakeButton(parent, name, text, order, callback)
 	local button = Instance.new("TextButton")
 	button.Name = name
 	button.LayoutOrder = order
-	button.Size = UDim2.fromOffset(385, 39)
+	button.Size = UDim2.new(1, -12, 0, 39)
 	button.BackgroundColor3 = Color3.fromRGB(194, 73, 115)
 	button.BorderSizePixel = 0
 	button.AutoButtonColor = false
@@ -7454,7 +7447,7 @@ function addon:InstallEditorControls()
 	local detailFrame = Instance.new("Frame")
 	detailFrame.Name = "Detail color"
 	detailFrame.LayoutOrder = 5000
-	detailFrame.Size = UDim2.fromOffset(385, 74)
+	detailFrame.Size = UDim2.new(1, -12, 0, 74)
 	detailFrame.BackgroundColor3 = Color3.fromRGB(194, 73, 115)
 	detailFrame.BorderSizePixel = 0
 	detailFrame:SetAttribute("CaelusSafeAddonEditor", true)
@@ -7484,7 +7477,7 @@ function addon:InstallEditorControls()
 	local input = Instance.new("TextBox")
 	input.Name = "RGB"
 	input.Position = UDim2.fromOffset(47, 34)
-	input.Size = UDim2.fromOffset(210, 30)
+	input.Size = UDim2.new(1, -175, 0, 30)
 	input.BackgroundColor3 = Color3.fromRGB(35, 35, 42)
 	input.BorderSizePixel = 0
 	input.ClearTextOnFocus = false
@@ -7498,7 +7491,8 @@ function addon:InstallEditorControls()
 
 	local setButton = Instance.new("TextButton")
 	setButton.Name = "Set"
-	setButton.Position = UDim2.fromOffset(265, 34)
+	setButton.AnchorPoint = Vector2.new(1, 0)
+	setButton.Position = UDim2.new(1, -10, 0, 34)
 	setButton.Size = UDim2.fromOffset(108, 30)
 	setButton.BackgroundColor3 = Color3.fromRGB(137, 43, 79)
 	setButton.BorderSizePixel = 0
@@ -8044,9 +8038,9 @@ function addon:InstallInputTracking()
 			if input.UserInputType == Enum.UserInputType.Keyboard then
 				local keyName = string.upper(input.KeyCode.Name)
 
-				if keyName == "F" and state.activeMorph then
-					state:playClawToggleSound(not state.clawsActive)
-				end
+				-- Claw-toggle audio is emitted by fireCommand(), the same path
+				-- used by keyboard and on-screen key buttons. Keeping one source
+				-- prevents duplicate F sounds and debounce-dependent behavior.
 				local keys =
 					environment.CaelusLegacyNekoConfig
 					and environment.CaelusLegacyNekoConfig.variants
@@ -8173,11 +8167,11 @@ function addon:Install()
 		self:Force2DPantsState()
 		self:ApplyCurrentVisualDetails()
 
-		-- Pendalar adds/removes rows dynamically. Re-measure every scrolling
-		-- frame a few times per second so Settings, Editor, Scripts, Credits,
-		-- and future tabs can always reach their actual last control.
+		-- Dynamic rows can change after saves/deletes, but continuously scanning
+		-- every descendant GUI is unnecessary. Refresh only the managed tab
+		-- scrolls at a modest cadence.
 		local now = os.clock()
-		if now - (self.LastScrollRefresh or 0) >= 0.35 then
+		if now - (self.LastScrollRefresh or 0) >= 1.0 then
 			self.LastScrollRefresh = now
 			self:FixAllScrolls()
 		end
