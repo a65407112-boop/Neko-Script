@@ -14,7 +14,7 @@ local Debris = game:GetService("Debris")
 local HttpService = game:GetService("HttpService")
 
 local environment = (type(getgenv) == "function" and getgenv()) or _G
-local RUNTIME_VERSION = "3.36.2-ui-input-fix"
+local RUNTIME_VERSION = "3.36.3-settings-animation-fix"
 
 local function startupLog(message)
 	pcall(function()
@@ -6767,6 +6767,7 @@ environment.CaelusNekoFeatureState = environment.CaelusNekoFeatureState or {
 	PunchingEnabled = true,
 	PunchWithClaws = false,
 	GameAnimationsAllowed = false,
+	MorphOnlyMode = false,
 }
 
 addon.Settings = environment.CaelusNekoFeatureState
@@ -7054,8 +7055,9 @@ function addon:RefreshScrollingFrame(scrollingFrame)
 			+ padding.PaddingBottom.Scale * scrollingFrame.AbsoluteSize.Y
 	end
 
+	local extraTail = scrollingFrame.AbsoluteSize.Y * 0.35
 	local height = math.max(
-		math.ceil(contentBottom + bottomPadding + 44),
+		math.ceil(contentBottom + bottomPadding + extraTail),
 		math.ceil(scrollingFrame.AbsoluteSize.Y) + 1
 	)
 
@@ -7496,7 +7498,7 @@ function addon:InstallEditorControls()
 	setButton.Size = UDim2.fromOffset(108, 30)
 	setButton.BackgroundColor3 = Color3.fromRGB(137, 43, 79)
 	setButton.BorderSizePixel = 0
-	setButton.Font = Enum.Font.RobotoBold
+	setButton.Font = Enum.Font.GothamBold
 	setButton.Text = "Set color"
 	setButton.TextColor3 = Color3.new(1, 1, 1)
 	setButton.TextSize = 13
@@ -7827,6 +7829,10 @@ function addon:WantsGameAnimations()
 		return false
 	end
 
+	if self.Settings.MorphOnlyMode == true then
+		return true
+	end
+
 	if now < self.PunchActiveUntil
 		and self.Settings.PunchingEnabled ~= false
 	then
@@ -7944,6 +7950,12 @@ function addon:InstallSettings()
 
 	local definitions = {
 		{
+			"Morph Only (Game Animations)",
+			"MorphOnlyMode",
+			"Uses game idle/walk/jump; morph key animations still work",
+			5999,
+		},
+		{
 			"Custom Idle Animation",
 			"CustomIdle",
 			"OFF uses the game's idle animation",
@@ -7991,6 +8003,14 @@ function addon:InstallSettings()
 			end,
 			function(enabled)
 				self.Settings[key] = enabled
+
+				if key == "MorphOnlyMode" and enabled then
+					self.Settings.CustomIdle = false
+					self.Settings.CustomWalk = false
+					self.Settings.CustomJump = false
+					self.Settings.PunchingEnabled = false
+					self.PunchActiveUntil = 0
+				end
 
 				if key == "PunchingEnabled" and not enabled then
 					self.PunchActiveUntil = 0
