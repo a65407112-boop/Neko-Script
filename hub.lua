@@ -14,7 +14,7 @@ local Debris = game:GetService("Debris")
 local HttpService = game:GetService("HttpService")
 
 local environment = (type(getgenv) == "function" and getgenv()) or _G
-local RUNTIME_VERSION = "3.36.3-settings-animation-fix"
+local RUNTIME_VERSION = "3.36.4-r6-native-toggle-fix"
 
 local function startupLog(message)
 	pcall(function()
@@ -7118,28 +7118,43 @@ function addon:MakeButton(parent, name, text, order, callback)
 end
 
 function addon:MakeToggle(parent, name, text, order, getter, setter)
-	local button
-	button = self:MakeButton(
-		parent,
-		name,
-		"",
-		order,
-		function()
-			setter(not getter())
-			self:RefreshToggle(button, text, getter())
-		end
-	)
+	local button = self:MakeButton(parent, name, text, order, function()
+		setter(not getter())
+		self:RefreshToggle(button, text, getter())
+	end)
+
+	local slider = Instance.new("Frame")
+	slider.Name = "slider"
+	slider.Size = UDim2.fromOffset(25, 10)
+	slider.Position = UDim2.new(1, -40, 0.5, -5)
+	slider.BorderSizePixel = 0
+	slider.Parent = button
+	self:Corner(slider, 5)
+
+	local knob = Instance.new("Frame")
+	knob.Name = "knob"
+	knob.Size = UDim2.fromOffset(15, 15)
+	knob.BorderSizePixel = 0
+	knob.Parent = slider
+	self:Corner(knob, 8)
 
 	self:RefreshToggle(button, text, getter())
 	return button
 end
 
 function addon:RefreshToggle(button, text, enabled)
-	if not button or not button.Parent then
-		return
+	if not button or not button.Parent then return end
+	button.Text = text
+	local slider = button:FindFirstChild("slider")
+	local knob = slider and slider:FindFirstChild("knob")
+	if slider and knob then
+		slider.BackgroundColor3 = enabled
+			and Color3.fromRGB(0, 240, 0)
+			or Color3.fromRGB(200, 0, 0)
+		knob.Position = enabled
+			and UDim2.new(0, 15, 0, -3)
+			or UDim2.new(0, -5, 0, -3)
 	end
-
-	button.Text = text .. (enabled and "  [ON]" or "  [OFF]")
 end
 
 function addon:SelectedPresetName()
@@ -7874,6 +7889,16 @@ function addon:SetGameAnimationMode(enabled)
 
 	if self.LastGameAnimationMode == enabled then
 		self.Settings.GameAnimationsAllowed = enabled
+		-- Keep the native Animate script forced on while morph-only is active.
+		-- Some games/scripts disable it again after the initial handoff.
+		if enabled and self.Settings.MorphOnlyMode == true then
+			local character = state.realCharacter or player.Character
+			local animate = (state.animateScript and state.animateScript.Parent and state.animateScript)
+				or (character and character:FindFirstChild("Animate"))
+			if animate and animate:IsA("LocalScript") then
+				pcall(function() animate.Disabled = false end)
+			end
+		end
 		return
 	end
 
@@ -7884,7 +7909,9 @@ function addon:SetGameAnimationMode(enabled)
 	if animate and animate.Parent then
 		pcall(function()
 			if enabled then
-				animate.Disabled = state.animateWasDisabled == true
+				-- Morph-only means actual Roblox R6 animation, not merely
+				-- stopping the Neko pose copier. Force Animate to run.
+				animate.Disabled = false
 			else
 				animate.Disabled = true
 			end
