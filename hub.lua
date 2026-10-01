@@ -14,7 +14,7 @@ local Debris = game:GetService("Debris")
 local HttpService = game:GetService("HttpService")
 
 local environment = (type(getgenv) == "function" and getgenv()) or _G
-local RUNTIME_VERSION = "3.36.5-native-settings-controls"
+local RUNTIME_VERSION = "3.36.6-detail-color-wheel"
 
 local function startupLog(message)
 	pcall(function()
@@ -7395,7 +7395,7 @@ function addon:LoadEditorMeta(name)
 		self:DefaultScarfParts()
 	)
 
-	self:SetDetailInputColor(self.DetailColor)
+	if self.EditorControls.DetailSetColor then self.EditorControls.DetailSetColor(self.DetailColor) else self:SetDetailInputColor(self.DetailColor) end
 	self:RefreshEditorPartButtons()
 end
 
@@ -7463,77 +7463,46 @@ function addon:InstallEditorControls()
 	self.EditorControls.ScarfButtons = {}
 
 	local detailFrame = Instance.new("Frame")
-	detailFrame.Name = "Detail color"
-	detailFrame.LayoutOrder = 5000
-	detailFrame.Size = UDim2.new(1, -12, 0, 74)
-	detailFrame.BackgroundColor3 = Color3.fromRGB(194, 73, 115)
-	detailFrame.BorderSizePixel = 0
-	detailFrame:SetAttribute("CaelusSafeAddonEditor", true)
-	detailFrame.Parent = scroll
-	self:Corner(detailFrame, 5)
+	detailFrame.Name = "Detail color"; detailFrame.LayoutOrder = 5000
+	detailFrame.Size = UDim2.new(1, -12, 0, 220)
+	detailFrame.BackgroundColor3 = Color3.fromRGB(194,73,115); detailFrame.BorderSizePixel = 0
+	detailFrame:SetAttribute("CaelusSafeAddonEditor", true); detailFrame.Parent = scroll; self:Corner(detailFrame,5)
 
 	local detailTitle = Instance.new("TextLabel")
-	detailTitle.BackgroundTransparency = 1
-	detailTitle.Position = UDim2.fromOffset(10, 4)
-	detailTitle.Size = UDim2.new(1, -20, 0, 24)
-	detailTitle.Font = Enum.Font.Roboto
-	detailTitle.Text = "Detail color"
-	detailTitle.TextColor3 = Color3.new(1, 1, 1)
-	detailTitle.TextSize = 16
-	detailTitle.TextXAlignment = Enum.TextXAlignment.Left
-	detailTitle.Parent = detailFrame
+	detailTitle.BackgroundTransparency=1; detailTitle.Position=UDim2.fromOffset(10,4); detailTitle.Size=UDim2.new(1,-20,0,24)
+	detailTitle.Font=Enum.Font.Roboto; detailTitle.Text="Detail Color"; detailTitle.TextColor3=Color3.new(1,1,1)
+	detailTitle.TextSize=16; detailTitle.TextXAlignment=Enum.TextXAlignment.Left; detailTitle.Parent=detailFrame
 
-	local preview = Instance.new("Frame")
-	preview.Name = "Preview"
-	preview.Position = UDim2.fromOffset(10, 35)
-	preview.Size = UDim2.fromOffset(28, 28)
-	preview.BorderSizePixel = 0
-	preview.Parent = detailFrame
-	self:Corner(preview, 4)
-	self.EditorControls.DetailPreview = preview
+	local wheel=Instance.new("ImageButton"); wheel.Name="ColorWheel"; wheel.AutoButtonColor=false; wheel.BackgroundTransparency=1
+	wheel.Position=UDim2.fromOffset(12,34); wheel.Size=UDim2.fromOffset(150,150); wheel.Image="rbxassetid://6020299385"; wheel.Parent=detailFrame
+	local value=Instance.new("ImageButton"); value.Name="Brightness"; value.AutoButtonColor=false; value.Position=UDim2.fromOffset(176,42)
+	value.Size=UDim2.new(1,-190,0,22); value.BorderSizePixel=0; value.Parent=detailFrame; self:Corner(value,4)
+	local vg=Instance.new("UIGradient"); vg.Color=ColorSequence.new(Color3.new(0,0,0),Color3.new(1,1,1)); vg.Parent=value
+	local preview=Instance.new("Frame"); preview.Name="Preview"; preview.Position=UDim2.fromOffset(176,78); preview.Size=UDim2.new(1,-190,0,46)
+	preview.BorderSizePixel=0; preview.Parent=detailFrame; self:Corner(preview,5); self.EditorControls.DetailPreview=preview
+	local colorText=Instance.new("TextLabel"); colorText.BackgroundTransparency=1; colorText.Position=UDim2.fromOffset(176,132)
+	colorText.Size=UDim2.new(1,-190,0,44); colorText.Font=Enum.Font.Code; colorText.TextColor3=Color3.new(1,1,1)
+	colorText.TextSize=12; colorText.TextWrapped=true; colorText.Parent=detailFrame; self.EditorControls.DetailInput=nil
 
-	local input = Instance.new("TextBox")
-	input.Name = "RGB"
-	input.Position = UDim2.fromOffset(47, 34)
-	input.Size = UDim2.new(1, -175, 0, 30)
-	input.BackgroundColor3 = Color3.fromRGB(35, 35, 42)
-	input.BorderSizePixel = 0
-	input.ClearTextOnFocus = false
-	input.Font = Enum.Font.Code
-	input.PlaceholderText = "R, G, B  e.g. 255, 80, 160"
-	input.TextColor3 = Color3.new(1, 1, 1)
-	input.TextSize = 13
-	input.Parent = detailFrame
-	self:Corner(input, 4)
-	self.EditorControls.DetailInput = input
-
-	local setButton = Instance.new("TextButton")
-	setButton.Name = "Set"
-	setButton.AnchorPoint = Vector2.new(1, 0)
-	setButton.Position = UDim2.new(1, -10, 0, 34)
-	setButton.Size = UDim2.fromOffset(108, 30)
-	setButton.BackgroundColor3 = Color3.fromRGB(137, 43, 79)
-	setButton.BorderSizePixel = 0
-	setButton.Font = Enum.Font.GothamBold
-	setButton.Text = "Set color"
-	setButton.TextColor3 = Color3.new(1, 1, 1)
-	setButton.TextSize = 13
-	setButton.Parent = detailFrame
-	self:Corner(setButton, 4)
-
-	self:Remember(setButton.MouseButton1Click:Connect(function()
-		local color = self:ParseDetailColor(input.Text)
-		if color then
-			self.DetailColor = color
-			self:SetDetailInputColor(color)
-
-			if self.CurrentEditorName then
-				self:CaptureEditorMeta(self.CurrentEditorName)
-			end
-		else
-			input.Text = "Use: 255, 80, 160"
-		end
-	end))
+	local h,sat,val=self.DetailColor:ToHSV(); local draggingWheel=false; local draggingValue=false
+	local function applyColor()
+		self.DetailColor=Color3.fromHSV(h,sat,val); preview.BackgroundColor3=self.DetailColor; value.BackgroundColor3=Color3.fromHSV(h,sat,1)
+		local r=math.floor(self.DetailColor.R*255+0.5); local g=math.floor(self.DetailColor.G*255+0.5); local b=math.floor(self.DetailColor.B*255+0.5)
+		colorText.Text=string.format("#%02X%02X%02X  RGB %d, %d, %d",r,g,b,r,g,b)
+		if self.CurrentEditorName then local meta=self:EnsureMeta(self.CurrentEditorName); if meta then self:SetMetaColor(meta,self.DetailColor); self:SaveMeta(); self:ApplyCurrentVisualDetails() end end
+	end
+	local function updateWheel(position)
+		local center=wheel.AbsolutePosition+wheel.AbsoluteSize/2; local delta=Vector2.new(position.X,position.Y)-center
+		local radius=math.max(math.min(wheel.AbsoluteSize.X,wheel.AbsoluteSize.Y)/2,1); sat=math.min(delta.Magnitude/radius,1)
+		if delta.Magnitude>0 then h=(math.atan2(-delta.Y,delta.X)/(2*math.pi))%1 end; applyColor()
+	end
+	local function updateValue(position) val=math.clamp((position.X-value.AbsolutePosition.X)/math.max(value.AbsoluteSize.X,1),0,1); applyColor() end
+	self:Remember(wheel.InputBegan:Connect(function(input) if input.UserInputType==Enum.UserInputType.MouseButton1 or input.UserInputType==Enum.UserInputType.Touch then draggingWheel=true; updateWheel(input.Position) end end))
+	self:Remember(value.InputBegan:Connect(function(input) if input.UserInputType==Enum.UserInputType.MouseButton1 or input.UserInputType==Enum.UserInputType.Touch then draggingValue=true; updateValue(input.Position) end end))
+	self:Remember(UserInputService.InputChanged:Connect(function(input) if draggingWheel then updateWheel(input.Position) end; if draggingValue then updateValue(input.Position) end end))
+	self:Remember(UserInputService.InputEnded:Connect(function(input) if input.UserInputType==Enum.UserInputType.MouseButton1 or input.UserInputType==Enum.UserInputType.Touch then draggingWheel=false; draggingValue=false end end))
+	self.EditorControls.DetailSetColor=function(color) if typeof(color)=="Color3" then h,sat,val=color:ToHSV(); self.DetailColor=color; applyColor() end end
+	applyColor()
 
 	self:MakeButton(
 		scroll,
