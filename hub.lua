@@ -14,7 +14,7 @@ local Debris = game:GetService("Debris")
 local HttpService = game:GetService("HttpService")
 
 local environment = (type(getgenv) == "function" and getgenv()) or _G
-local RUNTIME_VERSION = "3.36.4-r6-native-toggle-fix"
+local RUNTIME_VERSION = "3.36.5-native-settings-controls"
 
 local function startupLog(message)
 	pcall(function()
@@ -6234,6 +6234,7 @@ function environment.CaelusPendalarNekoUI:Build()
 
 	self.ScriptsTab = scriptsTab
 	self.EditorTab = editorTab
+	self.SettingsTab = settingsTab
 
 	-- FE Animations uses a direct Settings row instead of Pendalar's
 	-- NewBoolButton. This guarantees the toggle is visible on mobile.
@@ -7964,53 +7965,41 @@ function addon:UpdateControllerCombat()
 end
 
 function addon:InstallSettings()
-	local scroll = self:TabScroll("Settings")
-	if not scroll then
+	local settingsTab = ui.SettingsTab
+	if not settingsTab or type(settingsTab.NewBoolButton) ~= "function" then
 		return
-	end
-
-	for _, child in ipairs(scroll:GetChildren()) do
-		if child:GetAttribute("CaelusSafeAddonSetting") == true then
-			child:Destroy()
-		end
 	end
 
 	local definitions = {
 		{
-			"Morph Only (Game Animations)",
+			"Morph Only (Default R6 Animations)",
 			"MorphOnlyMode",
-			"Uses game idle/walk/jump; morph key animations still work",
-			5999,
+			"Use Roblox R6 idle/walk/run/jump; Neko key animations still work",
 		},
 		{
 			"Custom Idle Animation",
 			"CustomIdle",
 			"OFF uses the game's idle animation",
-		6000,
 		},
 		{
 			"Custom Walking Animation",
 			"CustomWalk",
 			"OFF uses the game's walk/run animation",
-		6001,
 		},
 		{
 			"Custom Jump Animation",
 			"CustomJump",
 			"OFF uses the game's jump/freefall animation",
-		6002,
 		},
 		{
 			"Punching",
 			"PunchingEnabled",
 			"OFF completely disables click/tap punching",
-		6003,
 		},
 		{
 			"Punch With Claws",
 			"PunchWithClaws",
 			"Only uses claw punch while F claws are actually out",
-		6004,
 		},
 	}
 
@@ -8018,18 +8007,12 @@ function addon:InstallSettings()
 		local text = definition[1]
 		local key = definition[2]
 		local description = definition[3]
-		local order = definition[4]
 
-		local button = self:MakeToggle(
-			scroll,
-			"AddonSetting_" .. key,
+		settingsTab:NewBoolButton(
 			text,
-			order,
-			function()
-				return self.Settings[key] ~= false
-			end,
+			description,
 			function(enabled)
-				self.Settings[key] = enabled
+				self.Settings[key] = enabled == true
 
 				if key == "MorphOnlyMode" and enabled then
 					self.Settings.CustomIdle = false
@@ -8044,14 +8027,14 @@ function addon:InstallSettings()
 				end
 
 				self:UpdateControllerCombat()
-			end
+			end,
+			self.Settings[key] ~= false
 		)
-
-		button:SetAttribute("CaelusSafeAddonSetting", true)
-		button:SetAttribute("Description", description)
 	end
 
-	self:FixScroll("Settings")
+	task.defer(function()
+		self:FixScroll("Settings")
+	end)
 end
 
 function addon:InstallInputTracking()
